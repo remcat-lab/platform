@@ -1,14 +1,41 @@
-# Credential 서비스
+# 🛡️ Credential 서비스 설계 문서
 
-## 1. Api List
+## 1. API 목록
 
-### GetSession
- - WPF Client에서 사용자의 ID/PW를 이용해 로그인을 하고 AES를 위한 대칭키를 찾기 위한 SessionId를 발급한다.
- - ID/PW는 WPF Client에 embed 되어 있는 public key를 사용해서 암호화 해 서버로 전달한다.
- - ID/PW와 함께 client에서 AES를 만들어 전송하기 때문에 서버에서는 ID/PW로 Active Directory에서 인증이 정상적으로 되면 SessionId를 발급하고 AES와 함께 Table에 저장한다.
- - public key는 배포시 변경이 되므로, 업데이트를 하지 않은 client와 최신 client 간 public key가 동일하지 않은 문제를 해결하기 위해 RSA 키 쌍을 서버에 가지고 있다가 처리한다.
- - 배포시 public key가 변경될 때는 public key의 version이 있어 GetSession에 요청할때, 해당 version을 전달한다. 그리고 RSA 키는 2회까지만 유지하고 그 이전의 키들은 disable 시킨다.
+### 🔐 GetSession
+- WPF Client에서 사용자의 ID/PW를 RSA public key로 암호화하여 서버에 전송
+- Client에서 생성한 AES 키도 함께 전송
+- 서버는 RSA key version에 맞는 private key로 복호화 후, AD 인증
+- 인증 성공 시 `SessionId`를 발급하고, AES 키와 함께 세션 테이블에 저장
+- RSA key는 version 정보를 기반으로 관리하며, 2회 버전까지만 유지하고 이전 키는 disable 처리
 
-### ValidateionSession
- - SessionId와 AES로 암호화된 본문을 해석해 정상적인 세션으로 접근을 하는지 확인한다.
- - AES내부에는 현재 client에 저장된 사용자Id, Sequence를 함께 보내며, 서버에서는 sessionId로 AES와 사용자Id를 찾고, AES 복호화 한 뒤 사용자 Id와 비교해 맞으면 Sequence를 반환한다. 그러면 Client에서는 보냈던 Sequence를 비교해 정상적인지 확인한다.
+---
+
+### ✅ ValidateionSession
+- **Client**:
+  - DPAPI로 보호된 AES 키를 복호화하여 메모리에 유지
+  - 사용자 ID, timestamp, sequence를 AES로 암호화한 payload 생성
+  - sessionId와 함께 서버에 전송
+- **Server**:
+  - sessionId로 세션 테이블에서 AES, 사용자 ID, lastSequence 조회
+  - payload 복호화 → 사용자 ID 일치 여부 확인
+  - timestamp가 현재 시간과 ±2분 이내인지 확인
+  - sequence가 lastSequence보다 클 경우에만 유효
+  - 응답: AES로 암호화된 Sequence 반환
+- **Client**:
+  - 복호화된 응답의 Sequence가 보낸 값과 동일한지 확인
+
+---
+
+## 2. 장점 요약
+
+| 항목 | 설명 |
+|------|------|
+| ✅ RSA 기반 로그인 | Public Key만으로 안전한 로그인 |
+| ✅ AES Client 생성 | 클라이언트에서 키 생성으로 외부 노출 최소화 |
+| ✅ Session Table 관리 | 서버 상태 기반의 명확한 인증 유지 |
+| ✅ DPAPI 사용 | AES 키를 안전하게 클라이언트에 저장 가능 |
+| ✅ Replay Attack 방지 | Timestamp + Sequence 검증 |
+| ✅ RSA Key Rotation | Version 관리로 클라이언트 호환성 확보 |
+
+---
