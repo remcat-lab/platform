@@ -11,7 +11,7 @@
 
 ---
 
-### ✅ ValidateionSession
+### ✅ ValidationSession
 - **Client**:
   - DPAPI로 보호된 AES 키를 복호화하여 메모리에 유지
   - 사용자 ID, timestamp, sequence를 AES로 암호화한 payload 생성
