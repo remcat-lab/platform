@@ -27,6 +27,10 @@
 
 ---
 
+### RemoveSession
+ - 로그아웃 시, Credential에서 즉시 Session을 제거한다.
+ - 단일 로그인 방식으로 Session을 처리하는데 있어 유용하다.
+
 ## 2. 장점 요약
 
 | 항목 | 설명 |
