@@ -93,53 +93,6 @@ graph TD
 
 ```
 
-
-``` mermaid
-
-gantt
-    title A Gantt Diagram
-    dateFormat  YYYY-MM-DD
-    section Section
-    A task           :a1, 2014-01-01, 30d
-    Another task     :after a1  , 20d
-    section Another
-    Task in sec      :2014-01-12  , 12d
-    another task      : 24d
-
-```
-
-``` mermaid
-sequenceDiagram
-    Alice->>+John: Hello John, how are you?
-    Alice->>+John: John, can you hear me?
-    John-->>-Alice: Hi Alice, I can hear you!
-    John-->>-Alice: I feel great!
-```
-
-``` mermaid
-
-block-beta
-    columns 3
-    doc>"Document"]:3
-    space down1<[" "]>(down) space
-
-  block:e:3
-          l["left"]
-          m("A wide one in the middle")
-          r["right"]
-  end
-    space down2<[" "]>(down) space
-    db[("DB")]:3
-    space:3
-    D space C
-    db --> D
-    C --> db
-    D --> C
-    style m fill:#d6d,stroke:#333,stroke-width:4px
-    
-
-```
-
 ## 3. 주요 구성 요소
 
 ### ✅ WPF Client
