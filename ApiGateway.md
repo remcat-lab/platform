@@ -7,9 +7,9 @@
  - 서비스의 라우팅을 처리하는 것으로 생성되는 각 서비스의 name과 endpoint, access여부를 관리한다.
 
 ## 2. Cipher
-## 2-1. RSA
+### 2-1. RSA
 
- ### 키 생성
+ #### 키 생성
 ``` code
 using System.Security.Cryptography;
 using System.Text;
@@ -32,7 +32,7 @@ public class RsaKeyGenerator
 }
 ```
 
-### private 복호화
+#### private 복호화
 ``` code
 using System.Security.Cryptography;
 
@@ -54,7 +54,7 @@ public class RsaCrypto
 ```
 
 
-### Client 암호화
+#### Client 암호화
 ``` code
 using System.Security.Cryptography;
 using System.Text;
@@ -76,7 +76,7 @@ public static class RsaClientEncryptor
 }
 ```
 
-### SQL DDL
+#### SQL DDL
 ```code
 CREATE TABLE rsa_keys (
     seq int AUTO_INCREMENT PRIMARY KEY,
@@ -89,9 +89,9 @@ CREATE TABLE rsa_keys (
 ```
 
 
-## 2-2. AES
+### 2-2. AES
 
-### 키 생성, 암/복호화, DPAPI 사용으로 파일 저장
+#### 키 생성, 암/복호화, DPAPI 사용으로 파일 저장
 ``` code
 using System;
 using System.IO;
