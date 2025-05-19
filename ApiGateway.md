@@ -202,3 +202,119 @@ public class AesWithDpapi
 }
 
 ```
+
+### 스트림 처리
+```code
+using System;
+using System.Security.Cryptography;
+using System.IO;
+using System.Text;
+using System.Threading.Tasks;
+using System.Collections.Concurrent;
+
+public class GatewayStreamProcessor
+{
+    // --- Credential 서비스 연동 시뮬레이션 ---
+    // 실제 환경에서는 Credential 서비스의 API를 비동기 호출하여 세션 정보를 가져옵니다.
+    // 여기서는 메모리 상의 ConcurrentDictionary로 스레드 안전한 가상 세션 정보를 저장해둡니다.
+    private static ConcurrentDictionary<string, (byte[] aesKey, byte[] aesIV, string userId)> _sessionStore =
+        new ConcurrentDictionary<string, (byte[] aesKey, byte[] aesIV, string userId)>();
+
+    // 시뮬레이션: 초기 연결 성공 시 세션 정보를 저장하는 메서드 (서버 측에서 호출)
+    public static void StoreSession(string sessionId, byte[] aesKey, byte[] aesIV, string userId)
+    {
+        _sessionStore[sessionId] = (aesKey, aesIV, userId);
+        Console.WriteLine($"[SIM] 세션 정보 저장됨 (ID: {sessionId})");
+    }
+
+    // 시뮬레이션: 세션 ID로 AES 키, IV 및 사용자 정보를 비동기적으로 가져오는 메서드 (Gateway에서 호출)
+    private static Task<(byte[] aesKey, byte[] aesIV, string userId)?> GetAesKeyAndIVForSessionAsync(string sessionId)
+    {
+        // 실제 Credential 서비스 API 호출을 시뮬레이션 (간단히 Task.FromResult 사용)
+        if (_sessionStore.TryGetValue(sessionId, out var sessionInfo))
+        {
+            Console.WriteLine($"[SIM] 세션 정보 발견 (ID: {sessionId}, User: {sessionInfo.userId})");
+            return Task.FromResult<(byte[] aesKey, byte[] aesIV, string userId)?>(sessionInfo);
+        }
+        Console.WriteLine($"[SIM] 세션 정보 찾을 수 없음 (ID: {sessionId})");
+        return Task.FromResult<(byte[] aesKey, byte[] aesIV, string userId)?>(null); // 세션 정보 없음 (무효 세션)
+    }
+    // --- 시뮬레이션 끝 ---
+
+
+    /// <summary>
+    /// 암호화된 입력 스트림을 복호화하여 다른 출력 스트림으로 전달합니다.
+    /// Stream.CopyToAsync를 사용하여 버퍼 관리를 자동으로 처리합니다.
+    /// </summary>
+    /// <param name="encryptedInputStream">클라이언트로부터 받은 암호화된 요청 본문 스트림</param>
+    /// <param name="sessionId">클라이언트 요청에서 추출한 세션 ID</param>
+    /// <param name="decryptedOutputStream">백엔드 서비스로 보낼 복호화된 요청 본문 스트림</param>
+    /// <returns>처리 작업 Task. 복호화 성공 시 사용자 ID 반환, 실패 시 null 반환.</returns>
+    public static async Task<string?> ProcessAndForwardEncryptedStreamAsync(
+        Stream encryptedInputStream,
+        string sessionId,
+        Stream decryptedOutputStream)
+    {
+        // 1. 세션 ID로 해당 세션의 AES 키와 IV, 사용자 정보를 비동기적으로 가져옵니다.
+        var sessionInfo = await GetAesKeyAndIVForSessionAsync(sessionId);
+
+        if (sessionInfo == null)
+        {
+            Console.WriteLine($"[ERROR] 복호화 실패: 세션 ID '{sessionId}'가 유효하지 않거나 만료됨.");
+            return null; // 유효하지 않거나 만료된 세션
+        }
+
+        byte[] sessionAesKey = sessionInfo.Value.aesKey;
+        byte[] sessionAesIV = sessionInfo.Value.aesIV;
+        string userId = sessionInfo.Value.userId;
+
+        // 2. AES 객체 생성 (암호화 시 사용했던 것과 동일한 키, IV, 모드, 패딩)
+        using (Aes aesAlg = Aes.Create())
+        {
+            aesAlg.Key = sessionAesKey;
+            aesAlg.IV = sessionAesIV;
+            aesAlg.Mode = CipherMode.CBC; // 클라이언트 암호화와 일치해야 함
+            aesAlg.Padding = PaddingMode.PKCS7; // 클라이언트 암호화와 일치해야 함
+
+            // 3. 복호화 객체 생성
+            ICryptoTransform decryptor = aesAlg.CreateDecryptor(aesAlg.Key, aesAlg.IV);
+
+            // 4. 암호화된 입력 스트림 위에 CryptoStream을 겹쳐서 생성
+            // 이 스트림(csDecrypt)에서 데이터를 읽으면 자동으로 복호화됩니다.
+            using (CryptoStream csDecrypt = new CryptoStream(encryptedInputStream, decryptor, CryptoStreamMode.Read))
+            {
+                Console.WriteLine($"[INFO] 복호화 및 스트리밍 시작 (Session ID: {sessionId})");
+
+                try
+                {
+                    // 5. 복호화된 데이터를 CryptoStream에서 읽어 출력 스트림으로 복사합니다.
+                    // CopyToAsync 메서드가 내부적으로 버퍼를 사용하여 효율적으로 처리합니다.
+                    await csDecrypt.CopyToAsync(decryptedOutputStream);
+
+                    Console.WriteLine($"[INFO] 스트림 복호화 및 전달 완료 (Session ID: {sessionId})");
+
+                    // 출력 스트림의 버퍼를 비워 최종 데이터가 전송되도록 합니다.
+                    await decryptedOutputStream.FlushAsync();
+
+                    // 복호화 및 전달 성공 시 사용자 ID 반환
+                    return userId;
+                }
+                catch (CryptographicException e)
+                {
+                    // 암호화 오류 발생 (잘못된 키/IV, 패딩 오류, 데이터 변조 등)
+                    Console.WriteLine($"[ERROR] 스트림 복호화 중 Cryptographic 오류 발생 (Session ID: {sessionId}): {e.Message}");
+                    // 보안상 연결을 종료하거나 오류 응답을 보내야 합니다.
+                    return null;
+                }
+                catch (Exception e)
+                {
+                    // 기타 오류 발생 (네트워크 오류, 스트림 오류 등)
+                    Console.WriteLine($"[ERROR] 스트림 처리 중 오류 발생 (Session ID: {sessionId}): {e.Message}");
+                    // 오류 처리 로직
+                    return null;
+                }
+            } // using (CryptoStream) 자동 Dispose
+        } // using (Aes) 자동 Dispose
+    } // method end
+}
+```
