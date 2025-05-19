@@ -1,8 +1,13 @@
 # Api Gateway
 
-암/복호화는 이곳에서 처리한다.
+## 1. 기능 설명
+ ### Ciphers
+ - Api Gateway와 Client간의 암호화 처리를 위한 기능으로 버전별 RSA 키를 보관, 관리한다.
+ ### Services 
+ - 서비스의 라우팅을 처리하는 것으로 생성되는 각 서비스의 name과 endpoint, access여부를 관리한다.
 
-## RSA
+## 2. Cipher
+## 2-1. RSA
 
  ### 키 생성
 ``` code
@@ -84,7 +89,7 @@ CREATE TABLE rsa_keys (
 ```
 
 
-## AES
+## 2-2. AES
 
 ### 키 생성, 암/복호화, DPAPI 사용으로 파일 저장
 ``` code
