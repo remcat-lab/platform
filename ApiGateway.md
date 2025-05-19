@@ -71,6 +71,19 @@ public static class RsaClientEncryptor
 }
 ```
 
+### SQL DDL
+```code
+CREATE TABLE rsa_keys (
+    seq int AUTO_INCREMENT PRIMARY KEY,
+    status tinyint unsigned DEFAULT 0,
+    unix_millis bigint NOT NULL,
+    version VARCHAR(16) NOT NULL,
+    public_key blob NOT NULL,
+    private_key blob NOT NULL
+);
+```
+
+
 ## AES
 
 ### 키 생성, 암/복호화, DPAPI 사용으로 파일 저장
