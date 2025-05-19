@@ -49,6 +49,9 @@
 - **전송 중**: RSA + AES 혼합 암호화.
 - **저장 시**: AES는 DPAPI로 로컬에 안전하게 저장.
 
+### 데이터 전송
+- json이 아닌 MemoryPack을 사용해 payload의 용량 최소화 및 serialize, deserialize 성능 최대화.
+
 ### 자동 업데이트
 - ClickOnce를 통한 무중단 업데이트 제공.
 
