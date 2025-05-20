@@ -1,4 +1,4 @@
-# PEN
+# Platform
 
 ## 1. 개요
 
