@@ -21,3 +21,11 @@
 ---
 
 
+## httpResponse의 BodyWriter Async는 aborted가 있어야 한다.
+- 클라이언트가 요청을 중단하면 서버도 작업을 중단해야 자원을 낭비하지 않게 됩니다.
+- 이를 위해 ASP.NET Core는 context.RequestAborted라는 CancellationToken을 제공합니다.
+- 이 토큰을 WriteAsync 같은 비동기 I/O 작업에 넘기지 않으면, 클라이언트가 연결을 끊었을 때도 서버가 계속 데이터를 쓰려 할 수 있습니다 → 자원 낭비 또는 예외 발생 가능.
+
+```code
+await context.Response.BodyWriter.WriteAsync(result, context.RequestAborted);
+```
