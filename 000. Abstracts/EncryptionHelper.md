@@ -40,69 +40,86 @@
 ### 예제 코드
 
 ``` code
+using System;
 using System.Security.Cryptography;
 using System.Text;
 
-public class RsaKeyGenerator
+public static class RsaEncryptionHelper
 {
-    public static (byte[] privateKeyBlob, string publicKeyXml) GenerateKeys()
+    // XML 문자열 방식 (기존)
+    public static (string publicKeyXml, string privateKeyXml) GenerateKeyPairXml()
     {
         using (var rsa = RSA.Create(2048))
         {
-            // Private Key - Export as PKCS#8 (Binary blob)
-            var privateKeyBlob = rsa.ExportPkcs8PrivateKey();
-
-            // Public Key - Export as XML string (you could also use PEM format)
-            var publicKeyXml = rsa.ToXmlString(false); // false = public only
-
-            return (privateKeyBlob, publicKeyXml);
+            string publicKeyXml = rsa.ToXmlString(false); // 공개키
+            string privateKeyXml = rsa.ToXmlString(true); // 비공개키
+            return (publicKeyXml, privateKeyXml);
         }
     }
-}
-```
 
-#### private 복호화
-``` code
-using System.Security.Cryptography;
-
-public class RsaCrypto
-{
-    private readonly RSA _rsa;
-
-    public RsaCrypto(byte[] privateKeyBlob)
-    {
-        _rsa = RSA.Create();
-        _rsa.ImportPkcs8PrivateKey(privateKeyBlob, out _);
-    }
-
-    public byte[] Decrypt(byte[] encryptedData)
-    {
-        return _rsa.Decrypt(encryptedData, RSAEncryptionPadding.OaepSHA256);
-    }
-}
-```
-
-
-#### Client 암호화
-``` code
-using System.Security.Cryptography;
-using System.Text;
-
-public static class RsaClientEncryptor
-{
-    // publicKeyXml은 서버에서 생성한 XML 문자열을 복사해 넣기
-    public const string PublicKeyXml = @"<RSAKeyValue><Modulus>...</Modulus><Exponent>...</Exponent></RSAKeyValue>";
-
-    public static byte[] Encrypt(string plainText)
+    public static byte[] EncryptWithXml(string plainText, string publicKeyXml)
     {
         using (var rsa = RSA.Create())
         {
-            rsa.FromXmlString(PublicKeyXml);
-            var bytesToEncrypt = Encoding.UTF8.GetBytes(plainText);
-            return rsa.Encrypt(bytesToEncrypt, RSAEncryptionPadding.OaepSHA256);
+            rsa.FromXmlString(publicKeyXml);
+            byte[] data = Encoding.UTF8.GetBytes(plainText);
+            return rsa.Encrypt(data, RSAEncryptionPadding.OaepSHA256);
+        }
+    }
+
+    public static string DecryptWithXml(byte[] cipherBytes, string privateKeyXml)
+    {
+        using (var rsa = RSA.Create())
+        {
+            rsa.FromXmlString(privateKeyXml);
+            byte[] decrypted = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA256);
+            return Encoding.UTF8.GetString(decrypted);
+        }
+    }
+
+    // -----------------------------------
+    // byte[] 방식 (추천)
+    // -----------------------------------
+
+    public static (byte[] publicKeyBytes, byte[] privateKeyBytes) GenerateKeyPairBytes()
+    {
+        using (var rsa = RSA.Create(2048))
+        {
+            // 공개키: X.509 SubjectPublicKeyInfo 형식
+            byte[] publicKeyBytes = rsa.ExportSubjectPublicKeyInfo();
+
+            // 개인키: PKCS#8 PrivateKeyInfo 형식
+            byte[] privateKeyBytes = rsa.ExportPkcs8PrivateKey();
+
+            return (publicKeyBytes, privateKeyBytes);
+        }
+    }
+
+    public static byte[] EncryptWithBytes(string plainText, byte[] publicKeyBytes)
+    {
+        using (var rsa = RSA.Create())
+        {
+            // 공개키 복원
+            rsa.ImportSubjectPublicKeyInfo(publicKeyBytes, out _);
+
+            byte[] data = Encoding.UTF8.GetBytes(plainText);
+            return rsa.Encrypt(data, RSAEncryptionPadding.OaepSHA256);
+        }
+    }
+
+    public static string DecryptWithBytes(byte[] cipherBytes, byte[] privateKeyBytes)
+    {
+        using (var rsa = RSA.Create())
+        {
+            // 개인키 복원
+            rsa.ImportPkcs8PrivateKey(privateKeyBytes, out _);
+
+            byte[] decrypted = rsa.Decrypt(cipherBytes, RSAEncryptionPadding.OaepSHA256);
+            return Encoding.UTF8.GetString(decrypted);
         }
     }
 }
+
 ```
 
 #### SQL DDL
