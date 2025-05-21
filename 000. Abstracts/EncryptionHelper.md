@@ -122,20 +122,85 @@ public static class RsaEncryptionHelper
 
 ```
 
-#### SQL DDL
+
+
+## 2-2. AES
+
+# CipherMode 및 PaddingMode 요약
+
+## CipherMode 열거형 요약
+
+| 모드     | 설명                                                    | 특징                                                   |
+|----------|---------------------------------------------------------|--------------------------------------------------------|
+| CBC      | Cipher Block Chaining                                   | 각 블록이 이전 암호문 블록과 연결되어 암호화됨. IV 필요. 보안적으로 널리 사용됨. |
+| ECB      | Electronic Codebook                                     | 각 블록을 독립적으로 암호화. 패턴 노출 위험 있음. 사용 비추천. |
+| CFB      | Cipher Feedback                                          | 블록 암호를 스트림 암호처럼 사용. 작은 단위 암호화 가능.       |
+| OFB      | Output Feedback                                          | 암호화 출력 값을 다음 입력으로 사용. 오류 전파 없음. 스트림 암호와 유사. |
+| CTS      | Cipher Text Stealing                                    | 마지막 블록이 블록 크기보다 작을 경우 처리. CBC와 함께 사용.  |
+
+---
+
+## PaddingMode 열거형 요약
+
+| 모드      | 설명                                                     | 특징                                                       |
+|-----------|----------------------------------------------------------|------------------------------------------------------------|
+| None      | 패딩 없음                                                | 입력이 블록 크기의 배수여야 함. 직접 처리 필요.                  |
+| PKCS7     | 부족한 블록에 패딩 바이트 수로 채움                     | 가장 일반적으로 사용됨. 대부분의 시스템과 호환됨.                |
+| Zeros     | 부족한 부분을 0x00 바이트로 채움                        | 텍스트 데이터에는 부적합할 수 있음.                              |
+| ANSIX923  | 마지막 바이트에 패딩 길이를 쓰고, 나머지는 0x00으로 채움 | 보안적으로 PKCS7보다 약간 덜 일반적이나 사용 가능.               |
+| ISO10126  | 마지막 바이트에 패딩 길이를 쓰고, 나머지는 임의 값으로 채움 | 무작위성 포함. 예측 어려움. 현재는 잘 사용되지 않음.              |
+
+
+### 예제 코드
 ```code
-CREATE TABLE rsa_keys (
-    seq int AUTO_INCREMENT PRIMARY KEY,
-    status tinyint unsigned DEFAULT 0,
-    unix_millis bigint NOT NULL,
-    version VARCHAR(16) NOT NULL,
-    public_key blob NOT NULL,
-    private_key blob NOT NULL
-);
+using System;
+using System.Security.Cryptography;
+using System.Text;
+
+public static class AesEncryptionHelper
+{
+    // AES 키와 IV를 생성하여 반환 (키: 32바이트(256bit), IV: 16바이트(128bit))
+    public static (byte[] key, byte[] iv) GenerateKeyIv()
+    {
+        using var aes = Aes.Create();
+        aes.KeySize = 256;
+        aes.GenerateKey();
+        aes.GenerateIV();
+        return (aes.Key, aes.IV);
+    }
+
+    // 평문을 AES-CBC + PKCS7 패딩으로 암호화 (키, IV 필요)
+    public static byte[] Encrypt(string plainText, byte[] key, byte[] iv)
+    {
+        using var aes = Aes.Create();
+        aes.Key = key;
+        aes.IV = iv;
+        aes.Mode = CipherMode.CBC;
+        aes.Padding = PaddingMode.PKCS7;
+
+        var encryptor = aes.CreateEncryptor();
+
+        byte[] plainBytes = Encoding.UTF8.GetBytes(plainText);
+        return encryptor.TransformFinalBlock(plainBytes, 0, plainBytes.Length);
+    }
+
+    // 암호문을 AES-CBC + PKCS7 패딩으로 복호화 (키, IV 필요)
+    public static string Decrypt(byte[] cipherBytes, byte[] key, byte[] iv)
+    {
+        using var aes = Aes.Create();
+        aes.Key = key;
+        aes.IV = iv;
+        aes.Mode = CipherMode.CBC;
+        aes.Padding = PaddingMode.PKCS7;
+
+        var decryptor = aes.CreateDecryptor();
+
+        byte[] decryptedBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
+        return Encoding.UTF8.GetString(decryptedBytes);
+    }
+}
+
 ```
-
-
-### 2-2. AES
 
 #### 키 생성, 암/복호화, DPAPI 사용으로 파일 저장
 ``` code
@@ -338,3 +403,15 @@ public class GatewayStreamProcessor
 ```
 
 
+
+#### SQL DDL
+```code
+CREATE TABLE rsa_keys (
+    seq int AUTO_INCREMENT PRIMARY KEY,
+    status tinyint unsigned DEFAULT 0,
+    unix_millis bigint NOT NULL,
+    version VARCHAR(16) NOT NULL,
+    public_key blob NOT NULL,
+    private_key blob NOT NULL
+);
+```
