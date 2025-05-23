@@ -10,7 +10,7 @@
 6. GetSession 에서는 RsaKeySeq를 보고 master key로 암호화된 encrypted private Key를 찾아 복호화 해 private key를 획득한다. private key로 본문을 복호화 하고, 그 중, ID, PW를 Active Directory에 인증 처리를 한다.
    만약 정상 인증이라면 SessionId를 생성하고, AES Key, IV와 UserId, SessionId를 Credential DB의 Session table에 넣는다. 이때 AES Key, IV는 Master Key로 암호화 해 넣는다. 만약 비정상이면 401을 반환한다.
 7. Http Status는 200으로 반환하면서, SessionId, UserId를 전달한다. 이때 Client에서 전달 받은 대칭키로 암호화해 Apigateway로 보내고 이것을 Client에 전달한다. 
-8. Client에서는 status 200일때, 본문을 가져와 생성했던 AES 키로 복호화 해, Session Id를 Client의 Preference에 저장한다.
+8. Client에서는 status 200일때, 본문을 가져와 생성했던 AES 키로 복호화 해, Session Id와 AES Key를 Client의 Preference에 DPAPI로 암호화 해 저장한다.
 
 
 ``` mermaid
