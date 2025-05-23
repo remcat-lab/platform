@@ -12,43 +12,6 @@
 7. Http Status는 200으로 반환하면서, SessionId, UserId를 전달한다. 이때 Client에서 전달 받은 대칭키로 암호화해 Apigateway로 보내고 이것을 Client에 전달한다. 
 8. Client에서는 status 200일때, 본문을 가져와 생성했던 AES 키로 복호화 해, Session Id를 Client의 Preference에 저장한다.
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant ApiGateway
-    participant CredentialServer
-    participant ActiveDirectory
-    participant CredentialDB
-
-    Note over Client: ClickOnce로 배포된 앱에<br/>PublicKey + KeySeq 포함됨
-
-    Client->>Client: AES 키 생성
-    Client->>Client: ID/PW, AES 키를<br/>PublicKey(KeySeq)에 의해 RSA 암호화
-    Client->>Client: MemoryPack으로 암호화<br/>+ KeySeq 포함
-
-    Client->>ApiGateway: POST /credential/getSession<br/>암호화된 Payload 전송 (HTTP)
-
-    ApiGateway->>CredentialServer: 전달 (URL 및 본문 그대로)
-
-    CredentialServer->>CredentialServer: KeySeq로 PrivateKey 찾음
-    CredentialServer->>CredentialServer: RSA 복호화 (ID/PW, AES)
-    CredentialServer->>ActiveDirectory: ID/PW 인증 요청
-
-    alt 인증 성공
-        ActiveDirectory-->>CredentialServer: OK
-        CredentialServer->>CredentialServer: SessionId 생성
-        CredentialServer->>CredentialDB: SessionId, UserId, AES를<br/>MasterKey로 암호화해 저장
-        CredentialServer->>CredentialServer: AES로 UserId, SessionId 암호화
-        CredentialServer->>ApiGateway: status 200 + 암호화된 응답
-        ApiGateway->>Client: 전달
-        Client->>Client: AES로 복호화하여 SessionId 저장
-    else 인증 실패
-        ActiveDirectory-->>CredentialServer: 인증 실패
-        CredentialServer->>ApiGateway: status 401
-        ApiGateway->>Client: 전달
-    end
-
-```
 
 ``` mermaid
 sequenceDiagram
