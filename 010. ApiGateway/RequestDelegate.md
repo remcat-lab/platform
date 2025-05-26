@@ -2,7 +2,7 @@
 
 1. RequestDelegate는 ApiGateway의 WebApplication의 Route Map에 연결된 대리자이다.
 2. Client에서 보낸 url의 두번째 segment가 serviceId인데, 이것으로 ApiGateway DB의 Route Table에서 Route Row를 가져온다.
-3. 만약 Route Row가 없을때는 400 status를 반환하고, 없는 serviceId 요청이라고 알려준다.
+3. 만약 Route Row가 없을때는 501 status를 반환하고, 없는 serviceId 요청이라고 알려준다.
 4. Route.Allow가 1인 경우 Url을 그대로 해당 서비스에 라우팅 한다.
 5. Route.Allow가 0인 경우 Header의 SessionSeq를 확인한다.
 6. SessionSeq가 없다면 401 을 Client에 반환하고 종료한다.
@@ -28,7 +28,7 @@ sequenceDiagram
     RequestDelegate->>RouteDB: Get RouteRow by serviceId
     alt RouteRow not found
         RouteDB-->>RequestDelegate: null
-        RequestDelegate-->>Client: 400 Bad Request ("Unknown serviceId")
+        RequestDelegate-->>Client: 501 Not Implemented ("Unknown serviceId")
     else RouteRow found
         RouteDB-->>RequestDelegate: RouteRow (Allow)
         alt Route.Allow == 1
