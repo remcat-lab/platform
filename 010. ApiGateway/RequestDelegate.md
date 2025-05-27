@@ -7,56 +7,13 @@
 
 
 ``` mermaid
-sequenceDiagram
-    participant Client
-    participant RequestDelegate
-    participant RouteDB as ApiGateway DB (Route Table)
-    participant Credential
-    participant SessionDB as Credential DB (Session Table)
-    participant Service
+flowchart TD
+    A[Client에서 API 요청 <br>- 예: /api/serviceId/endpoint] --> B[ApiGateway의 RequestDelegate 처리]
+    B --> C[URL에서 serviceId 추출]
+    C --> D[RouteDB에서 serviceId로 Route 조회]
+    D --> E{Route 정보 존재함?}
+    E -- 예 --> F[정상 처리 - 해당 서비스로 프록시 요청]
+    E -- 아니오 --> G[501 Not Implemented 반환 - 존재하지 않는 serviceId 알림]
 
-    Client->>RequestDelegate: Request(url, EncryptedBody, Headers: EncryptedSessionId, EncryptedUserId, SessionSeq)
 
-    RequestDelegate->>RequestDelegate: Extract serviceId from URL (2nd segment)
-    RequestDelegate->>RouteDB: Get RouteRow by serviceId
-    alt RouteRow not found
-        RouteDB-->>RequestDelegate: null
-        RequestDelegate-->>Client: 501 Not Implemented ("Unknown serviceId")
-    else RouteRow found
-        RouteDB-->>RequestDelegate: RouteRow (Allow)
-        alt Route.Allow == 1
-            RequestDelegate->>Service: Forward request as-is
-            Service-->>RequestDelegate: Response (200 OK)
-            RequestDelegate-->>Client: Response (200 OK)
-        else Route.Allow == 0
-            alt SessionSeq is missing in header
-                RequestDelegate-->>Client: 401 Unauthorized
-            else SessionSeq exists
-                RequestDelegate->>Credential: GetSession(EncryptedSessionId, EncryptedUserId)
-                Credential->>SessionDB: Lookup Session
-
-                alt No session found
-                    SessionDB-->>Credential: Not Found
-                    Credential-->>RequestDelegate: 401 Unauthorized
-                    RequestDelegate-->>Client: 401 Unauthorized
-                else No permission
-                    SessionDB-->>Credential: No Permission
-                    Credential-->>RequestDelegate: 403 Forbidden
-                    RequestDelegate-->>Client: 403 Forbidden
-                else Valid session
-                    SessionDB-->>Credential: Session Info (EncryptedAesKey, AesIv)
-                    Credential-->>RequestDelegate: Session Info
-
-                    RequestDelegate->>RequestDelegate: Decrypt AesKey and AesIv using MasterKey
-                    RequestDelegate->>RequestDelegate: Decrypt Body with AES Key
-
-                    RequestDelegate->>Service: Request (Decrypted Body)
-                    Service-->>RequestDelegate: Response (200 OK)
-
-                    RequestDelegate->>RequestDelegate: Encrypt Response with AES
-                    RequestDelegate-->>Client: Encrypted Response (200 OK)
-                end
-            end
-        end
-    end
 ```
