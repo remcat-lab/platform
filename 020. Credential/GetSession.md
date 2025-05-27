@@ -1,56 +1,68 @@
-# GetSession
 
-1. Client는 Preference에 있는 EncryptedSessionId를 DPAPI로 복호화하여 SessionId를 얻는다.
-2. Client는 Preference에 있는 평문으로 보관된 SessionSeq를 Header에 담는다.
-3. Client는 Preference에 있는 SessionId와 UserId를 DPAPI로 복호화 한뒤, Preference에 있는 AES로 암호화 하여 Header에 담는다.
-4. Client는 요청 본문도 같은 AES 키로 암호화한다.
-5. Client는 GetInitializeDevicePage API를 호출한다.
-6. API Gateway는 SessionSeq를 확인하고, 있다면 Credential의 GetSession을 호출하고 결과를 받아 URL로 라우팅을 수행한다.
-7. Credential API는 전달받은 Header의 SessionSeq를 이용해 Credential DB에서 Session Row를 조회한다.
-8. 조회된 Row에서 얻은 AES 키로 Header의 SessionId와 UserId를 복호화한다.
-9. 복호화된 SessionId와 UserId가 DB에서 조회한 Row의 값과 일치하는지 확인한다.
-10. 일치한다면 해당 Session Row를 기반으로 Session 객체를 만들어 반환한다.
-11. 반환된 Session 객체가 비어 있는 경우는 http status 401 권한 필요를 Client에게 반환한다.
-12. ValidatePermission을 호출해, 현재 사용자와 url이 접근 권한이 있는지 판단해, 만약 권한이 없다면 403 forbidden을 반환한다.
-13. ApiGateway는 반환된 Session 객체에 포함된 AES 키로 요청 본문을 복호화한다.
-14. 평문으로 만들어진 데이터를 Header와 함께 ServiceA로 요청한다.
-15. ServiceA에서 로직을 처리하고 ApiGateway에 응답을 전달한다. ApiGateway에서는 Client로 보낼 때, 압축 및 Session 객체를 이용해 암호화를 적용한다. 
+# Credential.GetSession API
 
-``` mermaid
+## 개요
+
+`Credential.GetSession` API는 내부 서비스 전용으로, 전달받은 세션 정보를 검증하고 유효한 경우 Session 객체를 반환하는 보안 API입니다. 외부 Client에서는 호출이 불가능하며, 오직 서버군의 IP에서만 접근이 허용됩니다.
+
+---
+
+## 요청 처리 흐름
+
+1. **요청 헤더 검사**
+   - `X-Forwarded-For` 또는 `RemoteIpAddress`에서 `clientIP` 확인
+   - 내부 서버군에 포함되지 않은 IP인 경우 **403 Forbidden** 또는 **401 Unauthorized** 반환
+
+2. **요청 본문 역직렬화**
+   - Body는 `MemoryPack` 직렬화 형식으로 전달됨
+   - 역직렬화를 통해 다음 값을 추출:
+     - `SessionSeq`
+     - `EncryptedSessionId`
+     - `EncryptedUserId`
+
+3. **Session Row 조회**
+   - `SessionSeq`를 기준으로 Session Table에서 Row 조회
+
+4. **AES 키 복호화**
+   - Row에 저장된 `EncryptedAES`를 Master Key로 복호화하여 실제 AES 키 획득
+
+5. **ID 복호화 및 검증**
+   - AES 키로 `EncryptedSessionId`, `EncryptedUserId` 복호화
+   - 복호화된 값과 Row의 `SessionId`, `UserId` 비교
+   - 불일치 시 **401 Unauthorized** 반환
+
+6. **Session 객체 생성 및 반환**
+   - 검증 성공 시, 해당 Session Row를 기반으로 Session 객체 생성
+   - 클라이언트 또는 호출 서비스에 Session 객체 반환
+
+---
+
+## Mermaid 시퀀스 다이어그램
+
+```mermaid
 sequenceDiagram
-    participant Client
-    participant ApiGateway
+    participant Client/Service
+    participant APIGateway
     participant CredentialAPI
-    participant AuthzService
-    participant ServiceA
+    participant SessionDB
+    participant CryptoModule
 
-    Client->>Client: 1. EncryptedSessionId DPAPI 복호화 → SessionId 획득
-    Client->>Client: 2. 평문 SessionSeq → Header에 담음
-    Client->>Client: 3. SessionId, UserId DPAPI 복호화 → AES 암호화 → Header에 담음
-    Client->>Client: 4. 본문도 AES 키로 암호화
-    Client->>ApiGateway: 5. GetInitializeDevicePage 호출 (암호화된 Header, Body 포함)
-
-    ApiGateway->>ApiGateway: 6. SessionSeq 확인
-    ApiGateway->>CredentialAPI: GetSession(SessionSeq, Encrypted SessionId/UserId)
-
-    CredentialAPI->>CredentialAPI: 7. SessionSeq로 DB에서 Session Row 조회
-    CredentialAPI->>CredentialAPI: 8. 조회된 AES 키로 Header의 SessionId, UserId 복호화
-    CredentialAPI->>CredentialAPI: 9. 복호화된 값이 DB의 SessionId, UserId와 일치하는지 확인
-    CredentialAPI-->>ApiGateway: 10. Session 객체 반환 (없으면 null)
-
-    alt Session 없음
-        ApiGateway-->>Client: 11. HTTP 401 Unauthorized 반환
-    else Session 있음
-        ApiGateway->>AuthzService: 12. ValidatePermission(Session.UserId, 요청 URL)
-        alt 권한 없음
-            ApiGateway-->>Client: 12. HTTP 403 Forbidden 반환
-        else 권한 있음
-            ApiGateway->>ApiGateway: 13. Session 객체의 AES 키로 본문 복호화
-            ApiGateway->>ServiceA: 14. 평문 데이터 + Header 전달
-            ServiceA->>ServiceA: 15. 로직 처리
-            ServiceA-->>ApiGateway: 응답 반환
-            ApiGateway->>ApiGateway: 응답 압축 + AES 키로 암호화
-            ApiGateway-->>Client: 암호화된 응답 반환
-        end
+    Client/Service->>APIGateway: POST /credential/getsession\n+ Headers + Binary Body (MemoryPack)
+    APIGateway->>CredentialAPI: 요청 전달
+    CredentialAPI->>CredentialAPI: clientIP 확인\n(허용된 서버군 IP 아니면 차단)
+    CredentialAPI->>CredentialAPI: MemoryPack.Deserialize\n=> SessionSeq, EncryptedSessionId, EncryptedUserId
+    CredentialAPI->>SessionDB: SELECT * FROM Session WHERE SessionSeq = ?
+    SessionDB-->>CredentialAPI: Session Row 반환
+    CredentialAPI->>CryptoModule: Decrypt(EncryptedAES, MasterKey)
+    CryptoModule-->>CredentialAPI: AES Key
+    CredentialAPI->>CryptoModule: Decrypt(EncryptedSessionId, AES Key)
+    CredentialAPI->>CryptoModule: Decrypt(EncryptedUserId, AES Key)
+    CryptoModule-->>CredentialAPI: SessionId, UserId
+    CredentialAPI->>CredentialAPI: 검증 (복호화된 ID == DB Row ID)
+    alt 불일치 시
+        CredentialAPI-->>Client/Service: 401 Unauthorized
+    else 일치 시
+        CredentialAPI->>CredentialAPI: Session 객체 생성
+        CredentialAPI-->>Client/Service: Session 객체 반환
     end
 ```
