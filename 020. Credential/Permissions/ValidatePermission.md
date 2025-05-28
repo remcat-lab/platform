@@ -1,122 +1,128 @@
-# API 권한 제어 정책 설계 문서 (보완안)
+
+# API 권한 제어 정책 설계 문서 (비트 기반 확장 최종안)
 
 ## 1. 개요
 
-이 문서는 API Gateway 및 서비스의 권한 제어를 위해 제안된 정책 구조를 설명합니다.  
-본 설계는 부서(Department)와 사용자(User)를 기준으로 API 접근 권한을 평가하며, 유연성과 보안성을 모두 고려한 방식입니다.
+이 문서는 API Gateway 및 백엔드 서비스의 **접근 제어 정책**을 정의합니다.  
+부서(Department)와 사용자(User)를 기준으로 한 정책 기반 권한 관리 구조이며, 다음을 목표로 합니다:
+
+- ✅ 보안 우선 (Deny 우선 원칙)
+- ✅ 유연한 개인 권한 예외 처리
+- ✅ 비트 연산 기반 확장성
+- ✅ 고성능 URL Prefix 매칭
 
 ---
 
 ## 2. 권한 우선순위 모델
 
-| 부서 권한       | 처리 방식                                 |
-|----------------|--------------------------------------------|
-| **거부(Deny)**   | 무조건 접근 거부 (개인 권한 무시)              |
-| **승인(Allow)** | 개인 권한 중 **거부가 있으면 우선 거부**, 없으면 허용 |
-| **보류(Pending)** | 개인 권한 중 **승인만 처리**, 없으면 거부         |
+| 부서 상태(Status)   | 설명 |
+|---------------------|------|
+| **Deny (0b001)**     | 무조건 차단 (개인 권한 무시) |
+| **Allow (0b010)**    | 개인 권한이 거부일 경우 우선 거부, 그 외는 허용 |
+| **DefaultDeny (0b100)** | 개인 권한이 승인일 경우만 허용, 그 외 거부 |
 
-### 권한 평가 흐름 (의사코드)
+> ⚠️ `Status`는 비트 플래그로 저장하며, AND/OR 연산으로 비교합니다.  
+예: `Allow | DefaultDeny = 0b110` → 조건부 허용 의미 가능
+
+---
+
+## 3. 권한 평가 흐름 (비트 연산 기반 의사코드)
 
 ```pseudo
-function hasAccess(userId, departmentId, url):
-    deptPerm = getDeptPermission(departmentId, url)
-    userPerm = getUserPermission(userId, url)
+const DENY = 0b001
+const ALLOW = 0b010
+const DEFAULT_DENY = 0b100
 
-    if deptPerm == "거부":
+function hasAccess(userId, departmentId, url):
+    deptStatus = getDeptStatusPrefixMatch(departmentId, url)
+    userStatus = getUserStatusPrefixMatch(userId, url)
+
+    if (deptStatus & DENY) == DENY:
         return false
-    elif deptPerm == "승인":
-        if userPerm == "거부":
+
+    if (deptStatus & ALLOW) == ALLOW:
+        if (userStatus & DENY) == DENY:
             return false
         return true
-    elif deptPerm == "보류":
-        if userPerm == "승인":
+
+    if (deptStatus & DEFAULT_DENY) == DEFAULT_DENY:
+        if (userStatus & ALLOW) == ALLOW:
             return true
-        return false  # 개인 권한이 없거나 거부일 경우
+        return false
 ```
 
 ---
 
-## 3. 테이블 설계 예시
+## 4. 테이블 구조
 
 ```text
 ACL_Department
 --------------
-DepartmentId | Url         | Permission  -- (거부, 승인, 보류)
+DepartmentId | UrlPrefix   | Status  | ValidFrom | ValidTo
 
 ACL_User
----------
-UserId       | Url         | Permission  -- (거부, 승인)
+--------
+UserId       | UrlPrefix   | Status  | ValidFrom | ValidTo
 ```
 
-> **URL 매칭 타입 확장 예시**:
+- **UrlPrefix**: `/api/v1/user/` 처럼 특정 경로로 시작하는 URL을 의미 (Prefix 방식으로 고정)
+- **Status**: 3비트 이진값 (예: 0b010 = Allow)
 
-```text
-UrlMatchType | Url
--------------|------------------------
-Prefix       | /api/v1/
-Exact        | /api/v1/report
-Regex        | ^/api/v[0-9]+/report$
-```
+### Status 비트 정의
 
----
+| 상태명          | 비트값 | 의미                                       |
+|----------------|--------|--------------------------------------------|
+| Deny           | 0b001  | 명시적 거부, 우선 적용                     |
+| Allow          | 0b010  | 승인, 단 개인 거부가 있을 경우 무효화됨    |
+| DefaultDeny    | 0b100  | 명시적 승인 없이는 거부                    |
 
-## 4. 평가 예시
-
-| Dept 권한 | User 권한 | 최종 결과 | 설명                                        |
-|-----------|------------|-----------|---------------------------------------------|
-| 거부       | 승인        | 거부        | 부서가 거부했기 때문에 무조건 차단              |
-| 승인       | 없음        | 승인        | 부서가 허용했고, 사용자 예외 없음              |
-| 승인       | 거부        | 거부        | 사용자 오버라이드                            |
-| 보류       | 승인        | 승인        | 사용자 예외 허용                             |
-| 보류       | 없음        | 거부        | 보류 상태에서 사용자도 승인 안 했으므로 거부      |
+> 예: `Status = 0b110 (Allow | DefaultDeny)` → 조건부 허용 정책
 
 ---
 
-## 5. 개선 사항 요약
+## 5. 평가 예시
 
-### ✅ URL 범위 명확화
-
-- URL 매칭 방식(Prefix, Exact, Regex)을 구분하여 관리
-- 향후 권한 충돌 방지를 위해 UrlMatchType 필드 추가
-
-### ✅ 보류 용어 명확화
-
-- "보류(Pending)" → "기본 거부(Default Deny)" 또는 "사용자 권한 우선(User Driven)" 등으로 용어 개선 제안
-
-### ✅ 유효기간 및 조건 필드 추가
-
-```text
-ValidFrom | ValidTo   | Condition
-----------|-----------|--------------------------
-2025-01-01 | 2025-12-31 | WorkingHoursOnly = true
-```
-
-- 또는 MetaData JSON 필드로 조건 표현
-
-### ✅ 성능을 위한 캐시 고려
-
-- Redis 또는 MemoryCache로 권한 정보 캐싱
-- 캐시 갱신 시점: 정책 변경 시 자동 무효화 또는 TTL 기반
-
-### ✅ 기타 고려 요소
-
-- Method(GET/POST 등)별 권한 구분
-- Role 기반 정책과의 통합 가능성
-- 감사 로그 및 추적 가능성
+| 부서 상태 | 사용자 상태 | 최종 결과 | 설명 |
+|-----------|--------------|-----------|------|
+| 0b001 (Deny)   | 0b010 (Allow)   | ❌ 거부     | 부서가 Deny면 무조건 차단 |
+| 0b010 (Allow)  | 없음            | ✅ 허용     | 부서가 허용, 사용자 예외 없음 |
+| 0b010 (Allow)  | 0b001 (Deny)    | ❌ 거부     | 사용자 거부 우선 |
+| 0b100 (DefaultDeny) | 0b010 (Allow) | ✅ 허용     | 사용자 명시적 허용 |
+| 0b100 (DefaultDeny) | 없음         | ❌ 거부     | 사용자 승인 없으므로 차단 |
 
 ---
 
-## 6. 장점 요약
+## 6. 고급 기능 (선택 적용)
 
-- **정책 주도적 접근**: 부서 중심으로 정책 수립 가능
-- **보안 우선순위 준수**: Deny 우선 원칙 유지
-- **관리와 제어의 균형**: 실무에서 실용적으로 적용 가능
-- **확장성 확보**: 단순한 구조로 다양한 상황에 대응 가능
+### ✅ 메서드 제어
+
+- `UrlPrefix` + `Method (GET, POST...)` 조합도 지원 가능
+- Status를 Method별로 세분화하고, 테이블에 필드 추가 가능
+
+### ✅ 역할 기반 (RBAC) 확장
+
+- `ACL_Role`, `UserRoles`, `DepartmentRoles` 테이블로 역할 기반 권한 위임 가능
+
+### ✅ 캐시 적용
+
+- 부서/사용자 권한 정보를 Redis 또는 메모리 캐시로 관리
+- 정책 변경 시 TTL 또는 수동 무효화
 
 ---
 
-## 7. 결론
+## 7. 장점 요약
 
-이 설계는 Windows 권한 모델과 유사하되, 부서 중심 정책 수립과 사용자 예외 적용이 균형 있게 설계되어 있습니다.  
-구조가 단순하여 운영 및 감사에 용이하며, 향후 URL 패턴 확장, 조건 기반 권한 부여, 캐시 최적화 등을 통해  
-더욱 고도화할 수 있는 기반을 제공합니다.
+| 항목                     | 설명 |
+|--------------------------|------|
+| ✅ **보안 우선**             | Deny 비트 우선 처리 |
+| ✅ **성능 최적화**           | Prefix 매칭 + 비트 연산 |
+| ✅ **확장성 우수**           | Method, Role, Cache 등 다양한 기능과 연동 가능 |
+| ✅ **직관적 구조**           | 테이블 2개로 충분히 표현 |
+| ✅ **RBAC 연동 가능**        | 역할 기반 관리에도 손쉬운 확장 가능 |
+
+---
+
+## 8. 결론
+
+비트 기반 `Status` 필드와 URL Prefix 매칭은 권한 판단 로직을 **효율적이고 확장 가능하게** 만들어줍니다.  
+추가로 Method별 분기 및 역할 기반 확장도 가능한 구조로, **고성능, 고보안, 고유연성**을 갖춘 API 접근 제어가 가능합니다.
