@@ -58,15 +58,16 @@ function hasAccess(userId, departmentId, url):
 ```text
 ACL_Department
 --------------
-DepartmentId | UrlPrefix   | Status  | ValidFrom | ValidTo
+DepartmentId | UrlPrefix   | Status  | ExpireDate
 
 ACL_User
 --------
-UserId       | UrlPrefix   | Status  | ValidFrom | ValidTo
+UserId       | UrlPrefix   | Status  | ExpireDate
 ```
 
 - **UrlPrefix**: `/api/v1/user/` 처럼 특정 경로로 시작하는 URL을 의미 (Prefix 방식으로 고정)
 - **Status**: 3비트 이진값 (예: 0b010 = Allow)
+- **ExpireDate**: 권한 만료일 (해당 일자 이후 무효)
 
 ### Status 비트 정의
 
