@@ -6,19 +6,19 @@ graph TD
     %% Frontend Group
     subgraph Frontend
         Desktop["Desktop (WPF UI)"]
-        CoreViewModel["CoreViewModel (WPF용 ViewModel)"]
+        CoreViewModel["CoreViewModel"]
     end
 
     %% Backend Group
     subgraph Backend
-        ApiService["ApiService (Backend API 서버)"]
-        CoreRepository["CoreRepository (DB 접근 로직)"]
+        ApiService["ApiService (HTTP + MemoryPack)"]
+        CoreRepository["CoreRepository"]
     end
 
-    %% Core (Shared) Group
+    %% Core (공통 계약/모델) Group
     subgraph Core
-        CoreContract["CoreContract (RPC Params/Result 인터페이스)"]
-        CoreModel["CoreModel (Entity 모델)"]
+        CoreContract["CoreContract (Params/Result DTO)"]
+        CoreModel["CoreModel (Entity/DTO 혼합)"]
     end
 
     %% Database Group
@@ -26,9 +26,10 @@ graph TD
         MariaDB["MariaDB"]
     end
 
-    %% 참조 관계
+    %% 참조 구조
     Desktop --> CoreViewModel
     Desktop --> CoreContract
+    Desktop --> CoreModel
 
     CoreViewModel --> CoreContract
     CoreViewModel --> CoreModel
@@ -37,4 +38,7 @@ graph TD
     ApiService --> CoreRepository
     CoreRepository --> CoreModel
     CoreRepository --> MariaDB
+
+    %% MemoryPack over HTTP 통신 경로
+    Desktop -- HTTP + MemoryPack --> ApiService
 ```
