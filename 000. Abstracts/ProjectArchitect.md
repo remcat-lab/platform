@@ -41,15 +41,11 @@ graph TD
         ApiServiceModel
     end
 
-    %% Contract Group
-    subgraph Contact
-        Contract
-    end
-
-    %% Database Group
-    subgraph Database
-        MariaDB
-    end
+    Contract
+   
+   
+        Database
+   
 
     %% 참조 구조
     Desktop --> DesktopModel
@@ -59,7 +55,7 @@ graph TD
     
     ApiService --> ApiServiceModel
     ApiServiceModel --> Contract
-    ApiServiceModel --> MariaDB
+    ApiServiceModel --> Database
 
     
 
