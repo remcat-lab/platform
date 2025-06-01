@@ -1,33 +1,39 @@
-using System.Text.Json;
-
 public class ValidatePermissionHandler : IApiHandler
 {
-    private readonly IDbContext _db;
-
     private const int DENY = 0b001;
     private const int ALLOW = 0b010;
     private const int DEFAULT_DENY = 0b100;
 
-    public ValidatePermissionHandler(IDbContext db)
-    {
-        _db = db;
-    }
-
     public async Task<ApiResponse> HandleAsync(ApiRequest request)
     {
-        if (!request.QueryParameters.TryGetValue("userId", out var userId) ||
-            !request.QueryParameters.TryGetValue("departmentId", out var departmentId) ||
-            !request.QueryParameters.TryGetValue("url", out var url))
+        Params? parameters = null;
+        try
+        {
+            parameters = MemoryPackSerializer.Deserialize<Params>(request.Body);
+        }
+        catch
         {
             return new ApiResponse
             {
                 StatusCode = 400,
-                Content = JsonSerializer.Serialize(new { error = "Missing required query parameters." })
+                Content = JsonSerializer.Serialize(new { error = "Invalid request body format." })
             };
         }
 
-        int deptStatus = await GetDeptStatusPrefixMatchAsync(departmentId, url);
-        int userStatus = await GetUserStatusPrefixMatchAsync(userId, url);
+        if (parameters == null ||
+            string.IsNullOrEmpty(parameters.UserId) ||
+            string.IsNullOrEmpty(parameters.DepartmentId) ||
+            string.IsNullOrEmpty(parameters.Url))
+        {
+            return new ApiResponse
+            {
+                StatusCode = 400,
+                Content = JsonSerializer.Serialize(new { error = "Missing required parameters." })
+            };
+        }
+
+        int deptStatus = await GetDeptStatusPrefixMatchAsync(parameters.DepartmentId, parameters.Url);
+        int userStatus = await GetUserStatusPrefixMatchAsync(parameters.UserId, parameters.Url);
 
         bool hasAccess = EvaluatePermission(deptStatus, userStatus);
 
@@ -65,31 +71,37 @@ public class ValidatePermissionHandler : IApiHandler
 
     private async Task<int> GetDeptStatusPrefixMatchAsync(string departmentId, string url)
     {
-        var now = DateTime.UtcNow;
+        const string sql = @"
+            SELECT TOP 1 Status
+            FROM ACL_Department
+            WHERE DepartmentId = @DepartmentId
+              AND UrlPrefix IS NOT NULL
+              AND @Url LIKE UrlPrefix + '%'
+              AND (ExpireDate IS NULL OR ExpireDate > @Now)
+            ORDER BY LEN(UrlPrefix) DESC";
 
-        var entries = await _db.ACL_Department
-            .Where(d => d.DepartmentId == departmentId
-                     && d.UrlPrefix != null
-                     && url.StartsWith(d.UrlPrefix)
-                     && (d.ExpireDate == null || d.ExpireDate > now))
-            .OrderByDescending(d => d.UrlPrefix.Length)
-            .ToListAsync();
+        await using var connection = Setting.GetConnection("MainDb"); // 여기서 connection 생성
+        await connection.OpenAsync();
 
-        return entries.Count > 0 ? entries[0].Status : 0;
+        var status = await connection.QueryFirstOrDefaultAsync<int?>(sql, new { DepartmentId = departmentId, Url = url, Now = DateTime.UtcNow });
+        return status ?? 0;
     }
 
     private async Task<int> GetUserStatusPrefixMatchAsync(string userId, string url)
     {
-        var now = DateTime.UtcNow;
+        const string sql = @"
+            SELECT TOP 1 Status
+            FROM ACL_User
+            WHERE UserId = @UserId
+              AND UrlPrefix IS NOT NULL
+              AND @Url LIKE UrlPrefix + '%'
+              AND (ExpireDate IS NULL OR ExpireDate > @Now)
+            ORDER BY LEN(UrlPrefix) DESC";
 
-        var entries = await _db.ACL_User
-            .Where(u => u.UserId == userId
-                     && u.UrlPrefix != null
-                     && url.StartsWith(u.UrlPrefix)
-                     && (u.ExpireDate == null || u.ExpireDate > now))
-            .OrderByDescending(u => u.UrlPrefix.Length)
-            .ToListAsync();
+        await using var connection = Setting.GetConnection("MainDb"); // 여기서 connection 생성
+        await connection.OpenAsync();
 
-        return entries.Count > 0 ? entries[0].Status : 0;
+        var status = await connection.QueryFirstOrDefaultAsync<int?>(sql, new { UserId = userId, Url = url, Now = DateTime.UtcNow });
+        return status ?? 0;
     }
 }
