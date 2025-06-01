@@ -1,87 +1,120 @@
-using ApiHost.Handlers;
-using ApiHost.Middleware;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.ResponseCompression;
-using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Net.Http.Headers;
+using System;
+using System.Collections.Generic;
 using System.IO.Compression;
+using System.Linq;
+using System.Net;
+using System.Reflection;
 using System.Text.RegularExpressions;
 
-namespace ApiHost;
+namespace ApiServer;
 
 public static class ApiServerBuilder
 {
-    public static WebApplication Build(string[] args, int port)
+    public static void Run(string[] args, params Assembly[] apiHandlerAssemblies)
     {
+        // 콘솔 인자로 포트 받기 (예: --port 5001)
+        int port = 5000;
+        var portArg = args.FirstOrDefault(a => a.StartsWith("--port"));
+        if (portArg != null && int.TryParse(portArg.Split('=').LastOrDefault(), out var parsedPort))
+        {
+            port = parsedPort;
+        }
+
         var builder = WebApplication.CreateBuilder(args);
 
-        // 1. Kestrel 설정 (HTTP/1.1 + 포트)
+        // Configure Kestrel
         builder.WebHost.ConfigureKestrel(options =>
         {
-            options.ListenAnyIP(port, listenOptions =>
+            options.Limits.MaxRequestBodySize = 1L * 1024 * 1024 * 1024; // 1GB
+            options.Listen(IPAddress.Any, port, listenOptions =>
             {
-                listenOptions.Protocols = HttpProtocols.Http1;
+                listenOptions.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1;
             });
         });
 
-        // 2. ResponseCompression 설정
+        // Add CORS
+        builder.Services.AddCors(options =>
+        {
+            options.AddDefaultPolicy(policy =>
+            {
+                policy.WithOrigins("http://localhost", "http://127.0.0.1")
+                      .SetIsOriginAllowed(origin => Regex.IsMatch(origin, @"^http://.*\.domain\.com(:\d+)?$") || origin.StartsWith("http://localhost"))
+                      .AllowAnyHeader()
+                      .AllowAnyMethod();
+            });
+        });
+
+        // Add response compression
         builder.Services.AddResponseCompression(options =>
         {
-            options.EnableForHttps = true;
+            options.Providers.Add<GzipCompressionProvider>();
             options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(new[]
             {
-                "application/memorypack",
+                "application/x-memorypack",
                 "application/octet-stream"
             });
         });
-        builder.Services.Configure<GzipCompressionProviderOptions>(opts =>
+        builder.Services.Configure<GzipCompressionProviderOptions>(options =>
         {
-            opts.Level = CompressionLevel.Fastest;
+            options.Level = CompressionLevel.Fastest;
         });
 
-        // 3. CORS 설정
-        builder.Services.AddCors(options =>
-        {
-            options.AddPolicy("DefaultCors", policy =>
-            {
-                policy.SetIsOriginAllowed(origin =>
-                    origin == "http://localhost" ||
-                    Regex.IsMatch(origin, @"^http:\/\/.*\.domain\.com$"))
-                .AllowAnyMethod()
-                .AllowAnyHeader();
-            });
-        });
-
-        // 4. app 생성
         var app = builder.Build();
 
-        // 5. API 핸들러 DI 없이 Dictionary 생성
-        var apiByUrl = new Dictionary<string, IApiHandler>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["/api/hello"] = new HelloApiHandler()
-            // 외부 프로젝트의 핸들러도 여기 등록 가능
-        };
-
-        // 6. Middleware 등록
-        app.UseCors("DefaultCors");
+        app.UseCors();
         app.UseResponseCompression();
 
-        // 1GB maxRequestBodySize 설정
+        // API Handler 등록
+        var apiMap = DiscoverApiHandlers(app.Services, apiHandlerAssemblies);
+
         app.Use(async (context, next) =>
         {
-            var feature = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
-            if (feature != null && !feature.IsReadOnly)
-                feature.MaxRequestBodySize = 1_073_741_824; // 1GB
-
-            await next();
+            if (apiMap.TryGetValue(context.Request.Path, out var handler))
+            {
+                await handler.HandleAsync(context);
+            }
+            else
+            {
+                context.Response.StatusCode = 404;
+                await context.Response.WriteAsync("Not Found");
+            }
         });
 
-        app.UseMiddleware<ApiRouterMiddleware>(apiByUrl);
+        app.Run();
+    }
 
-        app.Run(async context =>
+    public static Dictionary<PathString, IApiHandler> DiscoverApiHandlers(IServiceProvider services, Assembly[] assemblies)
+    {
+        var apiMap = new Dictionary<PathString, IApiHandler>();
+
+        foreach (var assembly in assemblies)
         {
-            context.Response.StatusCode = 404;
-            await context.Response.WriteAsync("Unknown endpoint.");
-        });
+            var handlers = assembly
+                .GetTypes()
+                .Where(t => typeof(IApiHandler).IsAssignableFrom(t) && !t.IsAbstract && !t.IsInterface)
+                .Select(t => new
+                {
+                    Type = t,
+                    Route = t.GetCustomAttribute<RouteAttribute>()?.Template
+                })
+                .Where(x => !string.IsNullOrWhiteSpace(x.Route));
 
-        return app;
+            foreach (var handler in handlers)
+            {
+                if (!apiMap.ContainsKey(handler.Route))
+                {
+                    var instance = (IApiHandler)Activator.CreateInstance(handler.Type)!;
+                    apiMap[handler.Route] = instance;
+                }
+            }
+        }
+
+        return apiMap;
     }
 }
