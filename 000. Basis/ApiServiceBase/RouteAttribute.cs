@@ -1,10 +1,16 @@
-[AttributeUsage(AttributeTargets.Class, Inherited = false)]
-public class RouteAttribute : Attribute
-{
-    public string Path { get; }
+using Microsoft.AspNetCore.Http;
+using System;
 
-    public RouteAttribute(string path)
+namespace ApiServer
+{
+    [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
+    public sealed class RouteAttribute : Attribute
     {
-        Path = path.ToLowerInvariant();
+        public PathString Template { get; }
+
+        public RouteAttribute(string template)
+        {
+            Template = template;
+        }
     }
 }

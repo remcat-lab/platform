@@ -1,28 +1,30 @@
+using Microsoft.AspNetCore.Http;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+namespace ApiServer;
+
 public class ApiRouterMiddleware
 {
     private readonly RequestDelegate _next;
-    private readonly Dictionary<string, Type> _apiMap;
-    private readonly IServiceProvider _serviceProvider;
+    private readonly Dictionary<PathString, IApiHandler> _apiMap;
 
-    public ApiRouterMiddleware(RequestDelegate next, Dictionary<string, Type> apiMap, IServiceProvider serviceProvider)
+    public ApiRouterMiddleware(RequestDelegate next, Dictionary<PathString, IApiHandler> apiMap)
     {
         _next = next;
         _apiMap = apiMap;
-        _serviceProvider = serviceProvider;
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var path = context.Request.Path.ToString().ToLowerInvariant();
-
-        if (_apiMap.TryGetValue(path, out var handlerType))
+        if (_apiMap.TryGetValue(context.Request.Path, out var handler))
         {
-            using var scope = _serviceProvider.CreateScope();
-            var handler = (IApiHandler)scope.ServiceProvider.GetRequiredService(handlerType);
             await handler.HandleAsync(context);
-            return;
         }
-
-        await _next(context);
+        else
+        {
+            context.Response.StatusCode = 404;
+            await context.Response.WriteAsync("Not Found");
+        }
     }
 }

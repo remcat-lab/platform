@@ -1,4 +1,10 @@
-public interface IApiHandler
+using Microsoft.AspNetCore.Http;
+using System.Threading.Tasks;
+
+namespace ApiServer
 {
-    Task HandleAsync(HttpContext context);
+    public interface IApiHandler
+    {
+        Task HandleAsync(HttpContext context);
+    }
 }

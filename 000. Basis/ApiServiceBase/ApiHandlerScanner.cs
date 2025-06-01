@@ -1,22 +1,39 @@
+using Microsoft.AspNetCore.Http;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+
+namespace ApiServer;
+
 public static class ApiHandlerScanner
 {
-    public static Dictionary<string, Type> DiscoverApiHandlers(IServiceCollection services, params Assembly[] assemblies)
+    public static Dictionary<PathString, IApiHandler> DiscoverApiHandlers(Assembly[] assemblies)
     {
-        var map = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+        var apiMap = new Dictionary<PathString, IApiHandler>();
 
-        var handlerTypes = assemblies.SelectMany(a => a.GetTypes())
-            .Where(t => !t.IsAbstract && typeof(IApiHandler).IsAssignableFrom(t))
-            .ToList();
-
-        foreach (var type in handlerTypes)
+        foreach (var assembly in assemblies)
         {
-            var routeAttr = type.GetCustomAttribute<RouteAttribute>();
-            if (routeAttr == null) continue;
+            var handlers = assembly
+                .GetTypes()
+                .Where(t => typeof(IApiHandler).IsAssignableFrom(t) && !t.IsAbstract && !t.IsInterface)
+                .Select(t => new
+                {
+                    Type = t,
+                    Route = t.GetCustomAttribute<RouteAttribute>()?.Template
+                })
+                .Where(x => !string.IsNullOrWhiteSpace(x.Route));
 
-            services.AddScoped(type);
-            map[routeAttr.Path] = type;
+            foreach (var handler in handlers)
+            {
+                if (!apiMap.ContainsKey(handler.Route))
+                {
+                    var instance = (IApiHandler)Activator.CreateInstance(handler.Type)!;
+                    apiMap[handler.Route] = instance;
+                }
+            }
         }
 
-        return map;
+        return apiMap;
     }
 }

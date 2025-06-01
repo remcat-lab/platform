@@ -18,7 +18,6 @@ public static class ApiServerBuilder
 {
     public static void Run(string[] args, params Assembly[] apiHandlerAssemblies)
     {
-        // 콘솔 인자로 포트 받기 (예: --port 5001)
         int port = 5000;
         var portArg = args.FirstOrDefault(a => a.StartsWith("--port"));
         if (portArg != null && int.TryParse(portArg.Split('=').LastOrDefault(), out var parsedPort))
@@ -28,17 +27,15 @@ public static class ApiServerBuilder
 
         var builder = WebApplication.CreateBuilder(args);
 
-        // Configure Kestrel
         builder.WebHost.ConfigureKestrel(options =>
         {
-            options.Limits.MaxRequestBodySize = 1L * 1024 * 1024 * 1024; // 1GB
+            options.Limits.MaxRequestBodySize = 1L * 1024 * 1024 * 1024;
             options.Listen(IPAddress.Any, port, listenOptions =>
             {
                 listenOptions.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1;
             });
         });
 
-        // Add CORS
         builder.Services.AddCors(options =>
         {
             options.AddDefaultPolicy(policy =>
@@ -50,7 +47,6 @@ public static class ApiServerBuilder
             });
         });
 
-        // Add response compression
         builder.Services.AddResponseCompression(options =>
         {
             options.Providers.Add<GzipCompressionProvider>();
@@ -70,51 +66,10 @@ public static class ApiServerBuilder
         app.UseCors();
         app.UseResponseCompression();
 
-        // API Handler 등록
-        var apiMap = DiscoverApiHandlers(app.Services, apiHandlerAssemblies);
+        var apiMap = ApiHandlerScanner.DiscoverApiHandlers(apiHandlerAssemblies);
 
-        app.Use(async (context, next) =>
-        {
-            if (apiMap.TryGetValue(context.Request.Path, out var handler))
-            {
-                await handler.HandleAsync(context);
-            }
-            else
-            {
-                context.Response.StatusCode = 404;
-                await context.Response.WriteAsync("Not Found");
-            }
-        });
+        app.UseMiddleware<ApiRouterMiddleware>(apiMap);
 
         app.Run();
-    }
-
-    public static Dictionary<PathString, IApiHandler> DiscoverApiHandlers(IServiceProvider services, Assembly[] assemblies)
-    {
-        var apiMap = new Dictionary<PathString, IApiHandler>();
-
-        foreach (var assembly in assemblies)
-        {
-            var handlers = assembly
-                .GetTypes()
-                .Where(t => typeof(IApiHandler).IsAssignableFrom(t) && !t.IsAbstract && !t.IsInterface)
-                .Select(t => new
-                {
-                    Type = t,
-                    Route = t.GetCustomAttribute<RouteAttribute>()?.Template
-                })
-                .Where(x => !string.IsNullOrWhiteSpace(x.Route));
-
-            foreach (var handler in handlers)
-            {
-                if (!apiMap.ContainsKey(handler.Route))
-                {
-                    var instance = (IApiHandler)Activator.CreateInstance(handler.Type)!;
-                    apiMap[handler.Route] = instance;
-                }
-            }
-        }
-
-        return apiMap;
     }
 }
