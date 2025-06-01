@@ -1,24 +1,35 @@
 public class ApiRouterMiddleware
 {
     private readonly RequestDelegate _next;
-    private readonly Dictionary<string, IApiHandler> _apiByUrl;
+    private readonly Dictionary<string, Type> _apiMap;
+    private readonly IServiceProvider _provider;
 
-    public ApiRouterMiddleware(RequestDelegate next, Dictionary<string, IApiHandler> apiByUrl)
+    public ApiRouterMiddleware(RequestDelegate next,
+                               Dictionary<string, Type> apiMap,
+                               IServiceProvider provider)
     {
         _next = next;
-        _apiByUrl = apiByUrl;
+        _apiMap = apiMap;
+        _provider = provider;
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
         var path = context.Request.Path.Value?.ToLowerInvariant();
-        if (path != null && _apiByUrl.TryGetValue(path, out var handler))
+
+        if (path != null && _apiMap.TryGetValue(path, out var handlerType))
         {
-            await handler.HandleAsync(context);
+            if (_provider.GetService(handlerType) is IApiHandler handler)
+            {
+                await handler.HandleAsync(context);
+                return;
+            }
+
+            context.Response.StatusCode = 500;
+            await context.Response.WriteAsync("Handler type not resolved");
             return;
         }
 
-        context.Response.StatusCode = 404;
-        await context.Response.WriteAsync("API not found");
+        await _next(context);
     }
 }
