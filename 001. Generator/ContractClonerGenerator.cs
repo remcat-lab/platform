@@ -2,6 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Text;
+using System.Text.RegularExpressions;
 
 [Generator]
 public class ContractCopyGenerator : ISourceGenerator
@@ -44,8 +45,9 @@ public class ContractCopyGenerator : ISourceGenerator
             foreach (var usingDirective in contractRoot.Usings)
             {
                 var text = usingDirective.ToFullString();
-                if (text.Contains("Contract"))
-                    text = text.Replace("Contract", targetSymbol.ContainingNamespace.ToDisplayString());
+
+                text = Regex.Replace(text, @"\bContract\b", "ApiModel");
+                
                 usingTexts.AppendLine(text.Trim());
             }
 
