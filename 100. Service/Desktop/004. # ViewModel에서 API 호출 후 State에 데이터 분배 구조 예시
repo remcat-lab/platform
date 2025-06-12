@@ -1,0 +1,100 @@
+
+# ViewModel에서 API 호출 후 State에 데이터 분배 구조 예시
+
+## 개요
+- API 호출은 ViewModel에서 수행
+- API 응답 결과(Result)는 여러 State 객체에 분배
+- State는 순수 상태 저장소 역할에 집중
+- ViewModel은 API 호출, 응답 분기, State 갱신 담당
+
+---
+
+## 클래스 설계
+
+### Result 클래스 예시
+```csharp
+public class InitializeEditResult
+{
+    public DepartmentPermission DepartmentPermission { get; set; }
+    public List<Department> Departments { get; set; }
+    public List<User> Users { get; set; }
+}
+```
+
+### State 클래스 예시
+
+```csharp
+public class DepartmentPermissionState
+{
+    public DepartmentPermission DepartmentPermission { get; set; }
+}
+
+public class ReferenceState
+{
+    public List<Department> Departments { get; private set; } = new();
+    public List<User> Users { get; private set; } = new();
+
+    public void SetDepartments(List<Department> departments)
+    {
+        Departments = departments;
+        // 필요 시 PropertyChanged 이벤트 등 추가
+    }
+
+    public void SetUsers(List<User> users)
+    {
+        Users = users;
+        // 필요 시 PropertyChanged 이벤트 등 추가
+    }
+}
+```
+
+### ViewModel 예시
+
+```csharp
+public class DepartmentPermissionViewModel : INotifyPropertyChanged
+{
+    private readonly DepartmentPermissionState _mainState;
+    private readonly ReferenceState _referenceState;
+    private readonly IApiService _apiService;
+
+    public DepartmentPermissionViewModel(DepartmentPermissionState mainState, ReferenceState referenceState, IApiService apiService)
+    {
+        _mainState = mainState;
+        _referenceState = referenceState;
+        _apiService = apiService;
+    }
+
+    public DepartmentPermission DepartmentPermission => _mainState.DepartmentPermission;
+    public List<Department> Departments => _referenceState.Departments;
+    public List<User> Users => _referenceState.Users;
+
+    public async Task InitializeAsync()
+    {
+        var result = await _apiService.InitializeEditAsync();
+
+        _mainState.DepartmentPermission = result.DepartmentPermission;
+        _referenceState.SetDepartments(result.Departments);
+        _referenceState.SetUsers(result.Users);
+
+        OnPropertyChanged(nameof(DepartmentPermission));
+        OnPropertyChanged(nameof(Departments));
+        OnPropertyChanged(nameof(Users));
+    }
+
+    // INotifyPropertyChanged 구현부 생략
+    public event PropertyChangedEventHandler PropertyChanged;
+    protected void OnPropertyChanged(string propertyName) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+}
+```
+
+---
+
+## 요약
+- API 호출은 ViewModel에서 수행
+- API 응답은 여러 State에 나눠서 저장
+- State는 단순히 데이터를 보관하는 역할
+- ViewModel은 API 호출, 데이터 분배, UI 바인딩 담당
+- 이 구조는 테스트 및 유지보수가 용이
+
+---
