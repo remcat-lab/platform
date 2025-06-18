@@ -51,6 +51,29 @@ function hasAccess(userId, departmentId, url):
         return false
 ```
 
+```mermaid
+
+flowchart TD
+    A["Start: hasAccess"] --> B["Get deptStatus"]
+    B --> C["Get userStatus"]
+    C --> D["deptStatus & DENY == DENY?"]
+
+    D -- Yes --> Z1["Return false ❌"]
+    D -- No --> E["deptStatus & ALLOW == ALLOW?"]
+
+    E -- Yes --> F["userStatus & DENY == DENY?"]
+    F -- Yes --> Z2["Return false ❌"]
+    F -- No --> Z3["Return true ✅"]
+
+    E -- No --> G["deptStatus & DEFAULT_DENY == DEFAULT_DENY?"]
+    G -- Yes --> H["userStatus & ALLOW == ALLOW?"]
+    H -- Yes --> Z4["Return true ✅"]
+    H -- No --> Z5["Return false ❌"]
+
+    G -- No --> Z6["Return false ❌"]
+
+
+```
 ---
 
 ## 4. 테이블 구조
