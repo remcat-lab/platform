@@ -1,3 +1,5 @@
+``` csharp
+
 public partial class MyViewModel : ObservableObject
 {
     [ObservableProperty]
@@ -24,3 +26,6 @@ public partial class MyViewModel : ObservableObject
         SaveCommand.NotifyCanExecuteChanged();
     }
 }
+
+
+```
