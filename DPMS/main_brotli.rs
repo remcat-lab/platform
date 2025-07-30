@@ -78,14 +78,18 @@ async fn create_tar_brotli_stream(base_dir: &Path, files: &[String]) -> tokio::i
         let mut brotli_writer = CompressorWriter::new(buf_writer, 4096, 5, 22);
         let mut tar_builder = Builder::new(&mut brotli_writer);
 
-        for f in files {
-            let full_path = base_dir.join(&f);
+        for (idx, f) in files.iter().enumerate() {
+            let full_path = base_dir.join(f);
             if full_path.exists() {
-                if let Err(e) = tar_builder.append_path_with_name(&full_path, &f) {
+                println!("Adding file {}/{}: {}", idx + 1, files.len(), f);
+                if let Err(e) = tar_builder.append_path_with_name(&full_path, f) {
                     eprintln!("tar append error: {}", e);
                 }
+            } else {
+                eprintln!("File not found: {}", full_path.display());
             }
         }
+
         tar_builder.finish().unwrap();
         brotli_writer.flush().unwrap();
         // writer drop -> 스트림 종료
