@@ -1,12 +1,14 @@
-// Rust client for file sync using tar + brotli (cross-platform, ureq HTTP client)
-use std::fs::{self, File};
-use std::io::{BufWriter, Write, Read};
+use std::fs;
+use std::io::{BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use brotli::CompressorWriter;
-use rayon::prelude::*;
+use futures_util::stream::{self, StreamExt};
 use serde::Deserialize;
+use tar::Builder;
+use tokio::io::{AsyncReadExt, DuplexStream};
+use tokio_util::io::ReaderStream;
 use walkdir::WalkDir;
 
 #[derive(Debug)]
@@ -30,31 +32,19 @@ fn collect_files(base_dir: &Path) -> Vec<FileMeta> {
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
-        .par_bridge()
-        .filter_map(|entry| {
+        .map(|entry| {
             let path = entry.path();
-            if let Ok(metadata) = fs::metadata(path) {
-                let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                let mtime = modified.duration_since(UNIX_EPOCH).unwrap().as_millis();
-                Some(FileMeta {
-                    path: normalize_path(path, base_dir),
-                    size: metadata.len(),
-                    mtime,
-                })
-            } else {
-                None
+            let metadata = fs::metadata(path).unwrap();
+            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            let mtime = modified.duration_since(UNIX_EPOCH).unwrap().as_millis();
+
+            FileMeta {
+                path: normalize_path(path, base_dir),
+                size: metadata.len(),
+                mtime,
             }
         })
         .collect()
-}
-
-fn write_csv(file_metas: &[FileMeta], csv_path: &Path) -> std::io::Result<()> {
-    let mut file = File::create(csv_path)?;
-    writeln!(file, "path,size,mtime")?;
-    for f in file_metas {
-        writeln!(file, "{},{},{}", f.path, f.size, f.mtime)?;
-    }
-    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,80 +52,90 @@ struct NeededFiles {
     needed_files: Vec<String>,
 }
 
-// ureq로 multipart/form-data 파일 업로드를 구현하는 함수
-fn post_multipart_file(url: &str, field_name: &str, file_path: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    use std::fs;
-    use std::io::Cursor;
-    use ureq::multipart::{FormData, Part};
+async fn request_needed_files(server_url: &str, csv_path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let form = reqwest::multipart::Form::new()
+        .file("csv", csv_path)?;
 
-    let file_bytes = fs::read(file_path)?;
-    let file_name = file_path.file_name().unwrap().to_string_lossy();
+    let resp = client.post(&format!("{}/apis/api/check_csv", server_url))
+        .multipart(form)
+        .send()
+        .await?;
 
-    let form = FormData::new()
-        .part(field_name, Part::bytes(file_bytes).file_name(file_name.to_string()));
-
-    let resp = ureq::post(url)
-        .set("Content-Type", "multipart/form-data") // ureq이 자동으로 세팅하지만 명시해도 무방
-        .send_form(form)?;
-
-    if resp.status() != 200 {
-        return Err(format!("HTTP error status: {}", resp.status()).into());
-    }
-    let text = resp.into_string()?;
-    Ok(text)
-}
-
-fn request_needed_files(server_url: &str, csv_path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    // POST multipart CSV to server and parse JSON response
-    let url = format!("{}/apis/api/check_csv", server_url);
-    let resp_text = post_multipart_file(&url, "csv", csv_path)?;
-
-    let needed: NeededFiles = serde_json::from_str(&resp_text)?;
+    let needed: NeededFiles = resp.json().await?;
     Ok(needed.needed_files)
 }
 
-fn upload_tar(server_url: &str, tar_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let url = format!("{}/apis/api/upload", server_url);
-    let _resp_text = post_multipart_file(&url, "tar", tar_path)?;
-    println!("Upload successful");
-    Ok(())
-}
+/// tar + brotli를 async 스트림으로 만들어 DuplexStream의 쓰기쪽에 쓰고, 읽기쪽을 reqwest 바디로 사용
+async fn create_tar_brotli_stream(base_dir: &Path, files: &[String]) -> tokio::io::DuplexStream {
+    let (mut writer, reader) = tokio::io::duplex(64 * 1024);
 
-fn create_tar_brotli(base_dir: &Path, files: &[String], output: &Path) -> std::io::Result<()> {
-    let tar_file = File::create(output)?;
-    let buf = BufWriter::new(tar_file);
-    let brotli_writer = CompressorWriter::new(buf, 4096, 5, 22);
-    let mut tar = tar::Builder::new(brotli_writer);
+    // tar + brotli를 쓰는 별도 태스크
+    let base_dir = base_dir.to_path_buf();
+    let files = files.to_owned();
+    tokio::spawn(async move {
+        let buf_writer = BufWriter::new(writer);
+        let mut brotli_writer = CompressorWriter::new(buf_writer, 4096, 5, 22);
+        let mut tar_builder = Builder::new(&mut brotli_writer);
 
-    for f in files {
-        let full_path = base_dir.join(f);
-        if full_path.exists() {
-            tar.append_path_with_name(&full_path, f)?;
+        for f in files {
+            let full_path = base_dir.join(&f);
+            if full_path.exists() {
+                if let Err(e) = tar_builder.append_path_with_name(&full_path, &f) {
+                    eprintln!("tar append error: {}", e);
+                }
+            }
         }
-    }
+        tar_builder.finish().unwrap();
+        brotli_writer.flush().unwrap();
+        // writer drop -> 스트림 종료
+    });
 
-    tar.finish()?;
+    reader
+}
+
+async fn upload_tar_stream(server_url: &str, base_dir: &Path, files: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let stream = create_tar_brotli_stream(base_dir, files).await;
+
+    let body = reqwest::Body::wrap_stream(ReaderStream::new(stream));
+
+    let client = reqwest::Client::new();
+    let res = client.post(&format!("{}/apis/api/upload", server_url))
+        .body(body)
+        .send()
+        .await?;
+
+    println!("Upload response: {}", res.status());
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let base_dir = PathBuf::from("./test-data"); // 작업 디렉토리
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let base_dir = PathBuf::from("./test-data");
     let csv_path = PathBuf::from("./file_list.csv");
-    let tar_path = PathBuf::from("./upload.tar.br");
     let server_url = "http://server.com:8080";
 
     let files = collect_files(&base_dir);
-    write_csv(&files, &csv_path)?;
 
-    let needed = request_needed_files(server_url, &csv_path)?;
+    // CSV 생성
+    {
+        let mut file = std::fs::File::create(&csv_path)?;
+        writeln!(file, "path,size,mtime")?;
+        for f in &files {
+            writeln!(file, "{},{},{}", f.path, f.size, f.mtime)?;
+        }
+    }
+
+    // 서버에 CSV 보내서 필요한 파일 리스트 받아오기
+    let needed = request_needed_files(server_url, &csv_path).await?;
 
     if needed.is_empty() {
         println!("No files to upload");
         return Ok(());
     }
 
-    create_tar_brotli(&base_dir, &needed, &tar_path)?;
-    upload_tar(server_url, &tar_path)?;
+    // tar + brotli 스트림 생성 + 업로드
+    upload_tar_stream(server_url, &base_dir, &needed).await?;
 
     Ok(())
 }
