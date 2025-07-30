@@ -1,13 +1,11 @@
-// Rust client for file sync using tar + brotli (cross-platform)
+// Rust client for file sync using tar + brotli (cross-platform, ureq HTTP client)
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Write, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use brotli::CompressorWriter;
 use rayon::prelude::*;
-use reqwest::blocking::Client;
-use reqwest::blocking::multipart;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
@@ -64,17 +62,43 @@ struct NeededFiles {
     needed_files: Vec<String>,
 }
 
+// ureq로 multipart/form-data 파일 업로드를 구현하는 함수
+fn post_multipart_file(url: &str, field_name: &str, file_path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    use std::fs;
+    use std::io::Cursor;
+    use ureq::multipart::{FormData, Part};
+
+    let file_bytes = fs::read(file_path)?;
+    let file_name = file_path.file_name().unwrap().to_string_lossy();
+
+    let form = FormData::new()
+        .part(field_name, Part::bytes(file_bytes).file_name(file_name.to_string()));
+
+    let resp = ureq::post(url)
+        .set("Content-Type", "multipart/form-data") // ureq이 자동으로 세팅하지만 명시해도 무방
+        .send_form(form)?;
+
+    if resp.status() != 200 {
+        return Err(format!("HTTP error status: {}", resp.status()).into());
+    }
+    let text = resp.into_string()?;
+    Ok(text)
+}
+
 fn request_needed_files(server_url: &str, csv_path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let client = Client::new();
-    let form = multipart::Form::new()
-        .file("csv", csv_path)?;
+    // POST multipart CSV to server and parse JSON response
+    let url = format!("{}/apis/api/check_csv", server_url);
+    let resp_text = post_multipart_file(&url, "csv", csv_path)?;
 
-    let res = client.post(&format!("{}/apis/api/check_csv", server_url))
-        .multipart(form)
-        .send()?;
-
-    let needed: NeededFiles = res.json()?;
+    let needed: NeededFiles = serde_json::from_str(&resp_text)?;
     Ok(needed.needed_files)
+}
+
+fn upload_tar(server_url: &str, tar_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let url = format!("{}/apis/api/upload", server_url);
+    let _resp_text = post_multipart_file(&url, "tar", tar_path)?;
+    println!("Upload successful");
+    Ok(())
 }
 
 fn create_tar_brotli(base_dir: &Path, files: &[String], output: &Path) -> std::io::Result<()> {
@@ -91,19 +115,6 @@ fn create_tar_brotli(base_dir: &Path, files: &[String], output: &Path) -> std::i
     }
 
     tar.finish()?;
-    Ok(())
-}
-
-fn upload_tar(server_url: &str, tar_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::new();
-    let form = multipart::Form::new()
-        .file("tar", tar_path)?;
-
-    let res = client.post(&format!("{}/apis/api/upload", server_url))
-        .multipart(form)
-        .send()?;
-
-    println!("Upload response: {}", res.status());
     Ok(())
 }
 
