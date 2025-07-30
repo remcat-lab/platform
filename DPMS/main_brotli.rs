@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use brotli::CompressorWriter;
+use rayon::prelude::*;
 use reqwest::blocking::Client;
 use reqwest::blocking::multipart;
 use serde::Deserialize;
@@ -27,27 +28,26 @@ fn normalize_path(path: &Path, base: &Path) -> String {
 }
 
 fn collect_files(base_dir: &Path) -> Vec<FileMeta> {
-    let mut files = Vec::new();
-    for entry in WalkDir::new(base_dir)
+    WalkDir::new(base_dir)
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
-    {
-        let path = entry.path();
-        let metadata = fs::metadata(path).unwrap();
-        let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-        let mtime = modified
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-
-        files.push(FileMeta {
-            path: normalize_path(path, base_dir),
-            size: metadata.len(),
-            mtime,
-        });
-    }
-    files
+        .par_bridge()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if let Ok(metadata) = fs::metadata(path) {
+                let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                let mtime = modified.duration_since(UNIX_EPOCH).unwrap().as_millis();
+                Some(FileMeta {
+                    path: normalize_path(path, base_dir),
+                    size: metadata.len(),
+                    mtime,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn write_csv(file_metas: &[FileMeta], csv_path: &Path) -> std::io::Result<()> {
