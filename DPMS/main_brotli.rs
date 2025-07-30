@@ -81,7 +81,9 @@ async fn create_tar_brotli_stream(base_dir: &Path, files: &[String]) -> tokio::i
         for (idx, f) in files.iter().enumerate() {
             let full_path = base_dir.join(f);
             if full_path.exists() {
-                println!("Adding file {}/{}: {}", idx + 1, files.len(), f);
+                if idx % 100 == 0 {
+                    println!("Processing file {}/{}: {}", idx + 1, files.len(), f);
+                }
                 if let Err(e) = tar_builder.append_path_with_name(&full_path, f) {
                     eprintln!("tar append error: {}", e);
                 }
