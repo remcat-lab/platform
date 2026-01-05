@@ -28,3 +28,30 @@ Array.Sort(indices, (a, b) => values[a].CompareTo(values[b]));
 코드를 사용할 때는 주의가 필요합니다.
 
 이 방식은 원본 데이터의 불변성을 유지해야 하거나, 데이터 하나의 크기가 너무 커서 정렬 시 발생하는 데이터 이동(Copy) 비용이 인덱스 정렬 비용보다 클 때 매우 유용합니다. 보다 정밀한 메모리 제어가 필요하다면 C# Memory와 Span 활용법을 확인해 보시기 바랍니다.
+
+
+정말 빠르게 하고 싶다면 이렇게 해야 함
+✅ Decorate–Sort–Undecorate (DSU)
+csharp
+
+접기
+저장
+복사
+1
+2
+3
+4
+5
+6
+7
+var keys = new long[n];
+for (int i = 0; i < n; i++)
+{
+    keys[i] = dateTimes[i].Ticks;
+}
+
+Array.Sort(keys, indices);
+❗ 성능 차이:
+
+기존: comparator 기반 n log n
+DSU: primitive compares → 2~5배 빠름
