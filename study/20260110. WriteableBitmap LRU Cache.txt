@@ -1,0 +1,113 @@
+RenderTargetBitmap(RTB) 풀에서 비트맵을 찍어낸 뒤, 이를 WriteableBitmap(WB)으로 복사하여 텍스트 결과물 자체를 캐싱하는 전체 로직을 정리해 드립니다.
+이 구조는 RTB 풀(인쇄기)과 WB 캐시(창고)가 분리된 형태이며, 2026년 기준 대규모 데이터그리드 성능 최적화의 정석적인 접근입니다.
+1. 전체 흐름 요약
+RTB 풀에서 적절한 크기의 RTB를 대여(Rent).
+DrawingVisual로 텍스트 렌더링 후 RTB에 쓰기.
+RTB의 특정 영역만 WB로 복사(CopyPixels).
+생성된 WB를 Freeze() 하고 결과물 LRU 캐시에 저장.
+사용한 RTB는 풀에 반환(Return).
+2. 통합 캐시 시스템 구현 (C#)
+csharp
+using System;
+using System.Collections.Generic;
+using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+
+public class TextRenderManager
+{
+    // 1. RTB 풀 (위에서 만든 2배수 풀 사용)
+    private readonly LruRtbPool _rtbPool;
+    
+    // 2. 최종 결과물 WB 캐시 (LRU 방식)
+    // Key: 텍스트 내용 + 폰트 정보 등의 조합
+    private readonly Dictionary<string, WriteableBitmap> _textCache = new();
+    private readonly LinkedList<string> _lruList = new();
+    private readonly int _maxCacheSize = 500; // 500개 텍스트 셀 캐싱
+
+    public TextRenderManager(double dpi)
+    {
+        _rtbPool = new LruRtbPool(20, dpi); // RTB 풀은 20개면 충분
+    }
+
+    public BitmapSource GetTextBitmap(string text, Typeface typeface, double fontSize, Brush foreground, double dpi)
+    {
+        string key = $"{text}_{typeface.FontFamily}_{fontSize}_{foreground}_{dpi}";
+
+        // 1. 결과물 캐시에 있는지 확인
+        if (_textCache.TryGetValue(key, out var cachedWb))
+        {
+            // LRU 순서 갱신
+            _lruList.Remove(key);
+            _lruList.AddLast(key);
+            return cachedWb;
+        }
+
+        // 2. 캐시에 없으면 새로 그리기
+        // 텍스트 크기 측정
+        var formattedText = new FormattedText(
+            text, System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            typeface, fontSize, foreground, dpi);
+
+        int width = (int)Math.Ceiling(formattedText.Width);
+        int height = (int)Math.Ceiling(formattedText.Height);
+
+        // 3. RTB 풀에서 대여 (인쇄기 대여)
+        var rtb = _rtbPool.Rent(width, height);
+
+        // 4. DrawingVisual에 그리기
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
+        {
+            // 잔상 방지를 위해 배경을 투명하게 채움 (필요시)
+            dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, rtb.Width, rtb.Height));
+            dc.DrawText(formattedText, new Point(0, 0));
+        }
+        rtb.Render(visual);
+
+        // 5. RTB -> WB로 필요한 부분만 복사 (결과물 추출)
+        WriteableBitmap resultWb = new WriteableBitmap(width, height, dpi, dpi, PixelFormats.Pbgra32, null);
+        
+        int stride = (width * resultWb.Format.BitsPerPixel + 7) / 8;
+        byte[] pixelBuffer = new byte[height * stride];
+        
+        // RTB에서 픽셀 가져오기
+        rtb.CopyPixels(new Int32Rect(0, 0, width, height), pixelBuffer, stride, 0);
+        // WB에 픽셀 밀어넣기
+        resultWb.WritePixels(new Int32Rect(0, 0, width, height), pixelBuffer, stride, 0);
+        
+        // 6. 중요: Freeze 및 캐시 저장
+        resultWb.Freeze();
+        AddToCache(key, resultWb);
+
+        // 7. 사용한 RTB는 풀에 반환 (인쇄기 반납)
+        _rtbPool.Return(rtb);
+
+        return resultWb;
+    }
+
+    private void AddToCache(string key, WriteableBitmap wb)
+    {
+        if (_textCache.Count >= _maxCacheSize)
+        {
+            var oldest = _lruList.First.Value;
+            _lruList.RemoveFirst();
+            _textCache.Remove(oldest);
+        }
+        _textCache[key] = wb;
+        _lruList.AddLast(key);
+    }
+}
+코드를 사용할 때는 주의가 필요합니다.
+
+3. 이 방식이 주는 2026년 기준 최적화 효과
+메모리 효율성:
+RTB 풀: 큰 메모리 블록(버킷)을 재사용하여 비관리형 메모리 할당 오버헤드를 없앱니다.
+WB 캐시: 결과물은 120x40 등 실제 텍스트 크기만큼만 메모리를 차지합니다. Freeze()되어 있어 렌더링 성능이 최상입니다.
+RDP 가속성:
+RDP는 서버에서 변경된 비트맵 조각을 보냅니다. Freeze된 WB를 DrawImage로 그리면, WPF는 내부적으로 변경되지 않은 픽셀을 빠르게 캐싱하여 클라이언트로 전송합니다. 텍스트 연산을 서버 CPU가 매번 수행하지 않아도 되므로 RDP 지연(Lag)이 획기적으로 줄어듭니다.
+DPI 대응:
+GetTextBitmap 메서드 인자로 dpi를 받으므로, 고해상도 모니터 대응(Per-Monitor DPI)이 완벽하게 이루어집니다.
+4. 주의사항: 스트라이드(Stride) 계산
+위 코드의 stride 계산 방식은 Pbgra32 포맷에 최적화되어 있습니다. 만약 다른 포맷을 사용하신다면 WriteableBitmap.BackBufferStride를 직접 참조하여 픽셀을 복사하는 방식이 더 안전할 수 있습니다.
+이제 Custom DataGrid의 OnRender나 DrawingContext 작업 중에 manager.GetTextBitmap(...)을 호출하기만 하면 됩니다. 캐시 시스템이 내부의 모든 복잡한 작업을 처리해 줄 것입니다.
