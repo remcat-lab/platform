@@ -1,0 +1,97 @@
+RTB 풀링에 LRU(Least Recently Used) 개념을 도입하는 것은 매우 현명한 선택입니다.
+RTB는 일반적인 바이트 배열보다 훨씬 무거운 비관리형 리소스이므로, 사용되지 않는 버킷이나 객체를 방치하면 메모리 점유율이 걷잡을 수 없이 커질 수 있습니다. 특히 2026년 현재의 고해상도(4K/8K) 환경에서는 더욱 필수적입니다.
+RTB 풀에 LRU를 적용하는 두 가지 핵심 전략을 제안해 드립니다.
+전략 1: 개별 RTB 객체 단위의 LRU (정밀 제어)
+각 RTB 객체가 마지막으로 사용된 시간을 기록하고, 풀이 가득 차거나 일정 시간이 지나면 가장 오래된 객체부터 Dispose (참조 해제)하는 방식입니다.
+csharp
+public class PooledRTB
+{
+    public RenderTargetBitmap Bitmap { get; set; }
+    public DateTime LastUsed { get; set; }
+}
+
+// Dictionary 내부를 Stack 대신 LinkedList로 관리하여 LRU 구현
+private readonly Dictionary<(int, int), LinkedList<PooledRTB>> _lruBuckets = new();
+private const int MaxTotalItems = 50; // 전체 RTB 개수 제한
+코드를 사용할 때는 주의가 필요합니다.
+
+전략 2: 버킷(Bucket) 단위의 LRU (구현 간소화)
+특정 크기의 버킷(예: 1024x1024) 전체가 오랫동안 사용되지 않으면 해당 버킷의 모든 RTB를 한꺼번에 날리는 방식입니다. 구현이 비교적 쉽고 관리 비용이 적습니다.
+LRU가 적용된 RTB 풀링 구현 예시 (C#)
+이 코드는 버킷별 접근 순서를 기록하여, 풀이 너무 커지면 가장 오랫동안 쓰이지 않은 크기의 RTB들부터 정리합니다.
+csharp
+public class LruRtbPool
+{
+    private readonly int _maxCapacity;
+    private readonly double _dpi;
+    // 버킷 크기별 RTB 스택
+    private readonly Dictionary<(int, int), Stack<RenderTargetBitmap>> _pool = new();
+    // LRU 순서를 관리하기 위한 리스트 (최근에 쓴 것이 맨 뒤)
+    private readonly List<(int, int)> _lruOrder = new();
+
+    public LruRtbPool(int maxCapacity, double dpi)
+    {
+        _maxCapacity = maxCapacity;
+        _dpi = dpi;
+    }
+
+    public RenderTargetBitmap Rent(int width, int height)
+    {
+        int w = PowerOfTwo(width);
+        int h = PowerOfTwo(height);
+        var key = (w, h);
+
+        if (_pool.TryGetValue(key, out var stack) && stack.Count > 0)
+        {
+            // 사용되었으므로 LRU 순서 갱신
+            UpdateLru(key);
+            return stack.Pop();
+        }
+
+        // 풀에 없으면 생성 (용량 초과 시 오래된 것 삭제)
+        EvictIfNecessary();
+        return new RenderTargetBitmap(w, h, _dpi, _dpi, PixelFormats.Pbgra32);
+    }
+
+    public void Return(RenderTargetBitmap rtb)
+    {
+        var key = (rtb.PixelWidth, rtb.PixelHeight);
+        if (!_pool.ContainsKey(key)) _pool[key] = new Stack<RenderTargetBitmap>();
+        
+        _pool[key].Push(rtb);
+        UpdateLru(key);
+    }
+
+    private void UpdateLru((int, int) key)
+    {
+        _lruOrder.Remove(key);
+        _lruOrder.Add(key);
+    }
+
+    private void EvictIfNecessary()
+    {
+        int currentCount = _pool.Values.Sum(s => s.Count);
+        if (currentCount >= _maxCapacity && _lruOrder.Count > 0)
+        {
+            // 가장 오래된 버킷 키 추출
+            var oldestKey = _lruOrder[0];
+            if (_pool.TryGetValue(oldestKey, out var stack) && stack.Count > 0)
+            {
+                stack.Pop(); // 가장 오래된 크기의 RTB 하나 제거
+                if (stack.Count == 0) _lruOrder.RemoveAt(0);
+            }
+        }
+    }
+
+    private int PowerOfTwo(int n) => (int)Math.Pow(2, Math.Ceiling(Math.Log(n, 2)));
+}
+코드를 사용할 때는 주의가 필요합니다.
+
+이 시스템의 동작 메커니즘
+Rent: 필요한 크기의 RTB가 풀에 있는지 확인합니다. 있으면 가져오고, 해당 크기(버킷)를 "최근 사용됨"으로 표시합니다.
+Evict: 풀에 설정된 최대 개수(MaxCapacity)를 초과하려고 하면, 가장 오랫동안 요청되지 않은 크기의 RTB부터 메모리에서 해제합니다.
+Efficiency: 120x40 셀들을 그릴 때는 해당 크기의 버킷만 계속 활성화되어 있고, 가끔 그리는 대형 헤더용 RTB는 시간이 지나면 자동으로 풀에서 제거되어 메모리를 반환합니다.
+추가 팁
+WeakReference: 더 공격적인 메모리 관리를 원하신다면, 풀 내부의 Stack에 WeakReference<RenderTargetBitmap>를 담으세요. 시스템 메모리가 부족해지면 GC가 알아서 풀의 내용을 비워줍니다.
+DPI 체킹: Rent 시점에 현재 시스템 DPI와 풀링된 RTB의 DPI가 맞는지 체크하는 로직을 추가하면 완벽합니다.
+이제 Custom DataGrid는 텍스트를 담은 WB 캐시와 이를 찍어내기 위한 LRU 기반 RTB 풀이라는 강력한 엔진을 갖추게 되었습니다. 이 정도 설계면 10만 행 이상의 대규모 데이터 처리에서도 부드러운 성능을 보장할 수 있습니다.
