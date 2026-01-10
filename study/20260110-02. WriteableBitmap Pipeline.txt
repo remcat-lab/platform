@@ -1,0 +1,89 @@
+1. 전체 프로세스 흐름 (Pipeline)
+Drawing 생성: DrawingContext를 통해 DrawingGroup에 DrawText 등 명령을 기록합니다.
+RTB 풀링: 메모리 할당 비용을 줄이기 위해 ArrayPool 전략처럼 미리 생성된 RenderTargetBitmap(RTB)을 꺼내옵니다.
+렌더링: RTB의 Render 메서드를 호출하여 DrawingGroup의 벡터 데이터를 비트맵(Buffer)으로 변환합니다.
+WB 복사: 비트맵을 바이너리 데이터로 다루거나 Freeze하기 위해 WriteableBitmap(WB)에 복사합니다.
+LRU 캐시 관리: 생성된 WB를 LRU 방식의 캐시에 저장하여 재사용하고, 사용이 끝난 RTB는 초기화 후 다시 풀에 반환합니다.
+2. 단계별 기본 코드 구현
+① RTB 풀링 및 DrawingGroup 렌더링
+RTB는 생성 비용이 매우 크기 때문에 사이즈별로 풀링하여 관리하는 것이 핵심입니다.
+csharp
+// 간단한 Pool 관리 예시 (실제 구현 시 사이즈별 Dictionary 등으로 확장)
+public class RenderTargetPool
+{
+    private readonly Stack<RenderTargetBitmap> _pool = new Stack<RenderTargetBitmap>();
+
+    public RenderTargetBitmap GetRTB(int width, int height)
+    {
+        if (_pool.Count > 0) return _pool.Pop();
+        // 96 DPI 기준 생성
+        return new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+    }
+
+    public void ReturnRTB(RenderTargetBitmap rtb) => _pool.Push(rtb);
+}
+코드를 사용할 때는 주의가 필요합니다.
+
+② DrawingContext를 통한 그리기 및 Render
+DrawingGroup을 사용하여 GPU 명령을 구성하고 RTB에 래스터화합니다.
+csharp
+public void RenderTextToBitmap(string text, RenderTargetBitmap rtb)
+{
+    DrawingGroup drawingGroup = new DrawingGroup();
+    using (DrawingContext dc = drawingGroup.Open())
+    {
+        // 텍스트 포맷팅 및 그리기
+        FormattedText formattedText = new FormattedText(
+            text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+            new Typeface("Arial"), 16, Brushes.Black, VisualTreeHelper.GetDpi(new Visual()).PixelsPerDip);
+
+        dc.DrawText(formattedText, new Point(0, 0));
+    }
+
+    // RTB에 렌더링 (이 과정에서 GPU 버퍼 사용)
+    rtb.Clear(); // 이전 잔상 제거
+    rtb.Render(drawingGroup);
+}
+코드를 사용할 때는 주의가 필요합니다.
+
+③ WriteableBitmap 복사 및 Freeze (LRU 캐시 적용 대상)
+RTB는 수정 가능 상태이므로 UI 스레드 소유권 문제가 발생할 수 있습니다. 이를 WriteableBitmap으로 복사 후 Freeze하여 가볍고 독립적인 상태로 만듭니다.
+csharp
+public WriteableBitmap CreateFrozenBitmap(RenderTargetBitmap rtb)
+{
+    // WB 생성 (RTB와 규격 동일)
+    WriteableBitmap wb = new WriteableBitmap(rtb.PixelWidth, rtb.PixelHeight, 96, 96, PixelFormats.Pbgra32, null);
+
+    // RTB의 버퍼를 WB로 복사
+    int stride = rtb.PixelWidth * (rtb.Format.BitsPerPixel / 8);
+    byte[] buffer = new byte[stride * rtb.PixelHeight];
+    rtb.CopyPixels(buffer, stride, 0);
+    wb.WritePixels(new Int32Rect(0, 0, rtb.PixelWidth, rtb.PixelHeight), buffer, stride, 0);
+
+    // 중요: Freeze하여 읽기 전용 및 스레드 공유 가능 상태로 변경
+    if (wb.CanFreeze) wb.Freeze();
+    
+    return wb;
+}
+코드를 사용할 때는 주의가 필요합니다.
+
+④ LRU 캐시 구조 (개념적 적용)
+복사된 WriteableBitmap은 LRU 캐시에 저장되어, 동일한 텍스트나 그래픽 요청 시 즉시 반환됩니다.
+csharp
+// LRU 캐시에서 가져오기 로직 예시
+string cacheKey = "Text_Sample_01";
+if (!lruCache.TryGetValue(cacheKey, out WriteableBitmap cachedBitmap))
+{
+    var rtb = pool.GetRTB(200, 50);
+    RenderTextToBitmap("Sample Text", rtb);
+    cachedBitmap = CreateFrozenBitmap(rtb);
+    lruCache.Add(cacheKey, cachedBitmap);
+    pool.ReturnRTB(rtb); // RTB는 다시 풀로
+}
+return cachedBitmap;
+코드를 사용할 때는 주의가 필요합니다.
+
+3. 핵심 요약 및 주의사항
+RTB 재사용: 풀에서 꺼낸 RTB는 반드시 rtb.Clear() 또는 투명 배경 그리기 과정을 통해 이전 프레임의 잔상을 지워야 합니다.
+복사 비용 vs 메모리: RTB에서 WB로의 복사는 CPU/RAM 자원을 소모하지만, Freeze된 WB는 WPF 렌더링 시스템에서 매우 빠르게 처리되며 여러 Image 컨트롤에서 동시에 참조해도 메모리 효율이 좋습니다.
+성능 최적화: 2026년 기준 하드웨어에서도 CopyPixels는 무거운 작업일 수 있으므로, 갱신 빈도가 너무 높다면 WB의 BackBuffer에 직접 쓰는 방식을 고려하십시오.
